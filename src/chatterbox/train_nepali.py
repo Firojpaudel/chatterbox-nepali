@@ -13,6 +13,11 @@ from tqdm import tqdm
 import librosa
 import numpy as np
 from safetensors.torch import save_file, load_file as load_safetensors
+import wandb
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+from huggingface_hub import HfApi
 
 from chatterbox.mtl_tts import ChatterboxMultilingualTTS, Conditionals
 from chatterbox.models.t3.t3 import T3
@@ -116,8 +121,20 @@ def collate_fn(batch):
     }
 
 def train(args):
-    device = torch.device(args.device)
-    
+    if args.distributed:
+        dist.init_process_group(backend="nccl")
+        local_rank = int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(local_rank)
+        device = torch.device("cuda", local_rank)
+        rank = dist.get_rank()
+    else:
+        device = torch.device(args.device)
+        rank = 0
+
+    if rank == 0 and not args.no_wandb:
+        wandb.init(project="chatterbox-nepali-finetune")
+        wandb.config.update(args)
+
     # Load pretrained components
     if args.ckpt_dir:
         model_wrapper = ChatterboxMultilingualTTS.from_local(args.ckpt_dir, device)
@@ -155,24 +172,35 @@ def train(args):
     hi_idx = 722
     ne_idx = 2454
     with torch.no_grad():
-        if t3.text_emb.weight.shape[0] > ne_idx:
+        if not args.skip_hi_init and t3.text_emb.weight.shape[0] > ne_idx:
             print(f"🎯 Initializing [ne] tag ({ne_idx}) weights from [hi] tag ({hi_idx})...")
             # 1. Update Embedding
             t3.text_emb.weight[ne_idx] = t3.text_emb.weight[hi_idx].clone()
             # 2. Update Prediction Head
             t3.text_head.weight[ne_idx] = t3.text_head.weight[hi_idx].clone()
+        elif args.skip_hi_init:
+            print(f"❄️ Skipping [hi] tag initialization as requested. [ne] will be learned from scratch.")
+
+    t3.to(device)
+    
+    if args.distributed:
+        t3 = DDP(t3, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
     
     t3.train()
     
     # Dataset
     dataset = NepaliDataset(args.manifest, tokenizer, s3_tokenizer, voice_encoder, device="cpu")
+    
+    sampler = DistributedSampler(dataset) if args.distributed else None
+    
     dataloader = DataLoader(
         dataset, 
         batch_size=args.batch_size, 
-        shuffle=True, 
+        shuffle=(sampler is None), 
+        sampler=sampler,
         collate_fn=collate_fn,
         num_workers=args.num_workers,
-        pin_memory=True if args.device != "cpu" else False
+        pin_memory=True if device.type != "cpu" else False
     )
     
     optimizer = AdamW(t3.parameters(), lr=args.lr)
@@ -186,7 +214,10 @@ def train(args):
             print(f"⏩ Setting internal loop iterator to start at Epoch {start_epoch}")
             
     for epoch in range(start_epoch, args.epochs):
-        pbar = tqdm(dataloader, desc=f"Epoch {epoch}")
+        if args.distributed:
+            sampler.set_epoch(epoch)
+            
+        pbar = tqdm(dataloader, desc=f"Epoch {epoch}") if rank == 0 else dataloader
         optimizer.zero_grad(set_to_none=True)
         for i, batch in enumerate(pbar):
             
@@ -197,7 +228,7 @@ def train(args):
             speaker_emb = batch['speaker_emb'].to(device)
             
             # Prepare T3Cond
-            prompt_len = t3.hp.speech_cond_prompt_len
+            prompt_len = t3.module.hp.speech_cond_prompt_len if args.distributed else t3.hp.speech_cond_prompt_len
             cond_prompt_tokens = speech_tokens[:, :prompt_len] if speech_tokens.size(1) > prompt_len else None
             
             t3_cond = T3Cond(
@@ -206,7 +237,13 @@ def train(args):
                 emotion_adv=0.5 * torch.ones(text_tokens.size(0), 1, 1, device=device)
             )
             
-            loss_text, loss_speech = t3.loss(
+            loss_text, loss_speech = t3.module.loss(
+                t3_cond=t3_cond,
+                text_tokens=text_tokens,
+                text_token_lens=text_token_lens,
+                speech_tokens=speech_tokens,
+                speech_token_lens=speech_token_lens
+            ) if args.distributed else t3.loss(
                 t3_cond=t3_cond,
                 text_tokens=text_tokens,
                 text_token_lens=text_token_lens,
@@ -221,7 +258,17 @@ def train(args):
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             
-            pbar.set_postfix({"loss": loss.item() * args.accum_steps, "loss_speech": loss_speech.item()})
+            if rank == 0:
+                pbar.set_postfix({"loss": loss.item() * args.accum_steps, "loss_speech": loss_speech.item()})
+                
+                if not args.no_wandb:
+                    wandb.log({
+                        "epoch": epoch,
+                        "loss": loss.item() * args.accum_steps,
+                        "loss_text": loss_text.item(),
+                        "loss_speech": loss_speech.item(),
+                        "lr": optimizer.param_groups[0]['lr']
+                    })
             
             # Memory Fixes for M2 Max
             del loss, loss_text, loss_speech, t3_cond
@@ -229,13 +276,30 @@ def train(args):
                 torch.mps.empty_cache()
             
         # Save checkpoint and generate sample
-        if epoch % args.save_every == 0:
+        if rank == 0 and epoch % args.save_every == 0:
             ckpt_path = f"t3_nepali_epoch_{epoch}.pt"
-            torch.save(t3.state_dict(), ckpt_path)
+            model_to_save = t3.module if args.distributed else t3
+            torch.save(model_to_save.state_dict(), ckpt_path)
+            
+            # --- PUSH TO HUB --- 
+            if args.push_to_hub:
+                try:
+                    api = HfApi()
+                    token = os.environ.get("HF_TOKEN")
+                    print(f"🚀 Pushing checkpoint {ckpt_path} to {args.push_to_hub}...")
+                    api.upload_file(
+                        path_or_fileobj=ckpt_path,
+                        path_in_repo=ckpt_path,
+                        repo_id=args.push_to_hub,
+                        token=token
+                    )
+                    print("✅ Checkpoint pushed successfully!")
+                except Exception as e:
+                    print(f"⚠️ Could not push checkpoint: {e}")
             
             # --- VALIDATION SAMPLE GENERATION ---
             print(f"\n📊 Generating validation sample for epoch {epoch}...")
-            t3.eval()
+            model_to_save.eval()
             with torch.no_grad():
                 test_text = "नमस्ते, म नेपाली बोलिरहेको छु। यो तालिम कस्तो चलिरहेको छ?"
                 
@@ -246,7 +310,7 @@ def train(args):
                 try:
                     # We reuse the model_wrapper's high-level generate logic
                     old_t3 = model_wrapper.t3
-                    model_wrapper.t3 = t3 
+                    model_wrapper.t3 = model_to_save
                     
                     val_wav = model_wrapper.generate(
                         test_text, 
@@ -272,13 +336,34 @@ def train(args):
                     model_wrapper.s3gen.tokenizer.cpu()
                     model_wrapper.ve.cpu()
             
-            t3.train()
+            model_to_save.train()
             # -----------------------------------
-    # Safetensors errors out if shared memory pointers exist. 
-    # Because 'patched_model' is a duplicated reference specifically made for the generate validation loop, it crashes. We strip it!
-    final_sd = {k: v for k, v in t3.state_dict().items() if not k.startswith("patched_model.")}
-    save_file(final_sd, "t3_mtl_nepali_final.safetensors")
-    print("Training finished. Saved to t3_mtl_nepali_final.safetensors")
+    
+    if rank == 0:
+        # Safetensors errors out if shared memory pointers exist. 
+        # Because 'patched_model' is a duplicated reference specifically made for the generate validation loop, it crashes. We strip it!
+        model_to_save = t3.module if args.distributed else t3
+        final_sd = {k: v for k, v in model_to_save.state_dict().items() if not k.startswith("patched_model.")}
+        save_file(final_sd, "t3_mtl_nepali_final.safetensors")
+        print("Training finished. Saved to t3_mtl_nepali_final.safetensors")
+        
+        if args.push_to_hub:
+            try:
+                api = HfApi()
+                token = os.environ.get("HF_TOKEN")
+                print(f"🚀 Pushing final model to {args.push_to_hub}...")
+                api.upload_file(
+                    path_or_fileobj="t3_mtl_nepali_final.safetensors",
+                    path_in_repo="t3_mtl_nepali_final.safetensors",
+                    repo_id=args.push_to_hub,
+                    token=token
+                )
+                print("✅ Final model pushed successfully!")
+            except Exception as e:
+                print(f"⚠️ Could not push final model: {e}")
+    
+    if args.distributed:
+        dist.destroy_process_group()
 
 if __name__ == "__main__":
     def get_default_device():
@@ -300,6 +385,10 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=50, help="Number of epochs for fine-tuning")
     parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate (usually 1e-5 to 5e-5)")
     parser.add_argument("--save_every", type=int, default=5, help="Save interval in epochs")
+    parser.add_argument("--skip_hi_init", action="store_true", help="Skip initializing Nepali weights from Hindi (helps with accent if you have enough data)")
+    parser.add_argument("--no_wandb", action="store_true", help="Disable Weights & Biases logging")
+    parser.add_argument("--distributed", action="store_true", help="Enable distributed training (DDP)")
+    parser.add_argument("--push_to_hub", type=str, help="Hugging Face repo ID to push checkpoints to (e.g. officialuser/chatterbox-nepali)")
     
     args = parser.parse_args()
     
