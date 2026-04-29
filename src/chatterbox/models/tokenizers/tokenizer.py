@@ -260,7 +260,8 @@ class MTLTokenizer:
         new_tokens = ["[ne]"]
         self.tokenizer.add_tokens([t for t in new_tokens if t not in self.tokenizer.get_vocab()])
         model_dir = Path(vocab_file_path).parent
-        self.cangjie_converter = ChineseCangjieConverter(model_dir)
+        self.model_dir = model_dir
+        self._cangjie_converter = None
         self.check_vocabset_sot_eot()
 
     def check_vocabset_sot_eot(self):
@@ -290,7 +291,9 @@ class MTLTokenizer:
         
         # Language-specific text processing
         if language_id == 'zh':
-            txt = self.cangjie_converter(txt)
+            if self._cangjie_converter is None:
+                self._cangjie_converter = ChineseCangjieConverter(self.model_dir)
+            txt = self._cangjie_converter(txt)
         elif language_id == 'ja':
             txt = hiragana_normalize(txt)
         elif language_id == 'he':
