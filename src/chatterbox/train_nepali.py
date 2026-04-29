@@ -64,8 +64,12 @@ class NepaliDataset(Dataset):
                     # Support multiple key names for audio
                     raw_audio = item.get('audio_path') or item.get('audio') or item.get('audio_filepath')
                     if raw_audio:
-                        item['audio_path'] = self._resolve_path(raw_audio)
-                        self.data.append(item)
+                        resolved = self._resolve_path(raw_audio)
+                        if resolved and os.path.exists(resolved):
+                            item['audio_path'] = resolved
+                            self.data.append(item)
+                        else:
+                            print(f"⚠️ Warning: Could not find audio file for {raw_audio}. Skipping.")
         else:
             # Handle CSV (usually | for this dataset) or TSV (\t)
             delimiter = '\t' if self.manifest_path.suffix == '.tsv' else '|'
@@ -78,8 +82,10 @@ class NepaliDataset(Dataset):
                         text = parts[1]
                         # Support potential [ne] tag in text or just raw text
                         audio_path = self._resolve_path(fname)
-                        if os.path.exists(audio_path):
+                        if audio_path and os.path.exists(audio_path):
                             self.data.append({"audio_path": str(audio_path), "text": text})
+                        else:
+                            print(f"⚠️ Warning: Could not find audio file for {fname}. Skipping.")
             
             if not self.data:
                 print(f"⚠️ Warning: No data loaded from {self.manifest_path}. Check delimiters or wav path.")
@@ -87,28 +93,45 @@ class NepaliDataset(Dataset):
                 print(f"✅ Loaded {len(self.data)} items from {self.manifest_path}")
 
     def _resolve_path(self, audio_val):
-        """Resolves audio filename or path against wav_dir if needed."""
+        """Aggressively resolves audio filename or path against multiple candidates."""
         p = Path(audio_val)
+        
+        # 1. Absolute path check
         if p.is_absolute() and p.exists():
             return str(p)
         
-        # Try relative to CWD
+        # 2. Relative to CWD
         if p.exists():
-            return str(p)
+            return str(p.absolute())
             
-        # Try relative to manifest parent / wav_dir
-        # If it's just a filename like 'nepali_001.wav'
-        cand1 = self.wav_dir / p.name
-        if cand1.exists():
-            return str(cand1)
+        # 3. Candidate directories to search
+        search_dirs = [
+            self.wav_dir,                               # Explicit --wav_dir or manifest_dir/wavs
+            self.manifest_path.parent,                  # Same dir as manifest
+            self.manifest_path.parent.parent / "wavs",   # One level up / wavs (common)
+            self.manifest_path.parent.parent,           # One level up (common)
+            Path("finetuning_data/wavs"),               # Specific to the current Kaggle setup
+            Path("/kaggle/input/voxcpm-nepali-data/wavs") # Potential Kaggle input path
+        ]
+        
+        for base_dir in search_dirs:
+            if not base_dir: continue
             
-        # If the manifest value is a path like 'wavs/nepali_001.wav'
-        cand2 = self.manifest_path.parent / p
-        if cand2.exists():
-            return str(cand2)
+            # Try as a direct child (filename only)
+            cand = base_dir / p.name
+            if cand.exists():
+                return str(cand.absolute())
             
-        # Return as is and let librosa error if it can't find it (or we can skip it)
-        return str(p)
+            # Try as a relative path from this base
+            cand = base_dir / p
+            if cand.exists():
+                return str(cand.absolute())
+
+        # If it has no extension, try adding .wav
+        if not p.suffix:
+            return self._resolve_path(audio_val + ".wav")
+
+        return None
 
     def __len__(self):
         return len(self.data)
