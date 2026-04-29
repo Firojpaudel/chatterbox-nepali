@@ -3,7 +3,10 @@ try:
 except ImportError:
     from importlib_metadata import version  # For Python <3.8
 
-__version__ = version("chatterbox-tts")
+try:
+    __version__ = version("chatterbox-tts")
+except Exception:
+    __version__ = "unknown"
 
 
 from .tts import ChatterboxTTS

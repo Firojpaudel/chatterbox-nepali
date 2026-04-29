@@ -1,3 +1,20 @@
+import sys
+from unittest.mock import MagicMock
+
+# --- KAGGLE/ENVIRONMENT FIX: Mock torchvision if it's broken ---
+# This prevents 'RuntimeError: operator torchvision::nms does not exist' which blocks transformers imports.
+try:
+    import torchvision
+except (ImportError, RuntimeError) as e:
+    # If torchvision is missing or throws a registration error (common on Kaggle with torch mismatch)
+    # we mock it because Chatterbox doesn't actually use torchvision.
+    if isinstance(e, ImportError) or "torchvision::nms" in str(e):
+        mock_tv = MagicMock()
+        mock_tv.__version__ = "0.0.0"
+        sys.modules["torchvision"] = mock_tv
+        sys.modules["torchvision.transforms"] = MagicMock()
+        sys.modules["torchvision.ops"] = MagicMock()
+        print("⚠️ Warning: torchvision is missing or broken. Mocked to allow transformers import.")
 
 import argparse
 import os
@@ -29,37 +46,69 @@ from chatterbox.models.voice_encoder import VoiceEncoder
 from chatterbox.models.tokenizers import MTLTokenizer
 
 class NepaliDataset(Dataset):
-    def __init__(self, manifest_path, tokenizer, s3_tokenizer, voice_encoder, device):
+    def __init__(self, manifest_path, tokenizer, s3_tokenizer, voice_encoder, device, wav_dir=None):
         self.tokenizer = tokenizer
         self.s3_tokenizer = s3_tokenizer
         self.voice_encoder = voice_encoder
         self.device = device
         self.data = []
+        
+        self.manifest_path = Path(manifest_path)
+        # If wav_dir not provided, we try to look in a 'wavs' folder next to the manifest
+        self.wav_dir = Path(wav_dir) if wav_dir else self.manifest_path.parent / "wavs"
 
-        manifest_path = Path(manifest_path)
-        if manifest_path.suffix == '.jsonl':
-            with open(manifest_path, 'r', encoding='utf-8') as f:
-                self.data = [json.loads(line) for line in f]
+        if self.manifest_path.suffix == '.jsonl':
+            with open(self.manifest_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    item = json.loads(line)
+                    # Support multiple key names for audio
+                    raw_audio = item.get('audio_path') or item.get('audio') or item.get('audio_filepath')
+                    if raw_audio:
+                        item['audio_path'] = self._resolve_path(raw_audio)
+                        self.data.append(item)
         else:
             # Handle CSV (usually | for this dataset) or TSV (\t)
-            delimiter = '\t' if manifest_path.suffix == '.tsv' else '|'
-            wav_dir = manifest_path.parent / "wavs"
+            delimiter = '\t' if self.manifest_path.suffix == '.tsv' else '|'
             
-            with open(manifest_path, 'r', encoding='utf-8') as f:
+            with open(self.manifest_path, 'r', encoding='utf-8') as f:
                 for line in f:
                     parts = line.strip().split(delimiter)
                     if len(parts) >= 2:
                         fname = parts[0]
                         text = parts[1]
                         # Support potential [ne] tag in text or just raw text
-                        audio_path = wav_dir / f"{fname}.wav"
-                        if audio_path.exists():
+                        audio_path = self._resolve_path(fname)
+                        if os.path.exists(audio_path):
                             self.data.append({"audio_path": str(audio_path), "text": text})
             
             if not self.data:
-                print(f"⚠️ Warning: No data loaded from {manifest_path}. Check delimiters or wav path.")
+                print(f"⚠️ Warning: No data loaded from {self.manifest_path}. Check delimiters or wav path.")
             else:
-                print(f"✅ Loaded {len(self.data)} items from {manifest_path}")
+                print(f"✅ Loaded {len(self.data)} items from {self.manifest_path}")
+
+    def _resolve_path(self, audio_val):
+        """Resolves audio filename or path against wav_dir if needed."""
+        p = Path(audio_val)
+        if p.is_absolute() and p.exists():
+            return str(p)
+        
+        # Try relative to CWD
+        if p.exists():
+            return str(p)
+            
+        # Try relative to manifest parent / wav_dir
+        # If it's just a filename like 'nepali_001.wav'
+        cand1 = self.wav_dir / p.name
+        if cand1.exists():
+            return str(cand1)
+            
+        # If the manifest value is a path like 'wavs/nepali_001.wav'
+        cand2 = self.manifest_path.parent / p
+        if cand2.exists():
+            return str(cand2)
+            
+        # Return as is and let librosa error if it can't find it (or we can skip it)
+        return str(p)
 
     def __len__(self):
         return len(self.data)
@@ -67,7 +116,7 @@ class NepaliDataset(Dataset):
     def __getitem__(self, idx):
         item = self.data[idx]
         audio_path = item['audio_path']
-        text = item['text']
+        text = item.get('text') or item.get('transcript') or ""
 
         # Do NOT prepend [START] in text since MTLTokenizer adds [ne] as prefix to the text.
         # This will misorder tokens as [ne] [START] instead of inference which uses [START] [ne].
@@ -189,7 +238,7 @@ def train(args):
     t3.train()
     
     # Dataset
-    dataset = NepaliDataset(args.manifest, tokenizer, s3_tokenizer, voice_encoder, device="cpu")
+    dataset = NepaliDataset(args.manifest, tokenizer, s3_tokenizer, voice_encoder, device="cpu", wav_dir=args.wav_dir)
     
     sampler = DistributedSampler(dataset) if args.distributed else None
     
@@ -375,6 +424,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=str, required=True, help="Path to manifest (jsonl, csv, or tsv)")
+    parser.add_argument("--wav_dir", type=str, help="Optional explicit directory for audio files")
     parser.add_argument("--ckpt_dir", type=str, help="Path to base pretrained model dir")
     parser.add_argument("--resume_t3_weights", type=str, help="Path to a t3_nepali_epoch_X.pt file to resume from")
     parser.add_argument("--device", type=str, default=get_default_device(), help="Device to use (cpu, cuda, mps)")
