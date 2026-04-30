@@ -252,8 +252,8 @@ class T3(nn.Module):
         shift_speech_logits = out.speech_logits[:, :-1, :].contiguous()
         shift_speech_labels = masked_speech[:, 1:].contiguous()
 
-        loss_text = F.cross_entropy(shift_text_logits.view(-1, out.text_logits.size(-1)), shift_text_labels.view(-1), ignore_index=IGNORE_ID)
-        loss_speech = F.cross_entropy(shift_speech_logits.view(-1, out.speech_logits.size(-1)), shift_speech_labels.view(-1), ignore_index=IGNORE_ID)
+        loss_text = F.cross_entropy(shift_text_logits.view(-1, out.text_logits.size(-1)), shift_text_labels.view(-1).long(), ignore_index=IGNORE_ID)
+        loss_speech = F.cross_entropy(shift_speech_logits.view(-1, out.speech_logits.size(-1)), shift_speech_labels.view(-1).long(), ignore_index=IGNORE_ID)
 
         return loss_text, loss_speech
 
