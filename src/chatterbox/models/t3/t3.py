@@ -181,11 +181,11 @@ class T3(nn.Module):
             input_ids=None,
             # position_ids=position_ids, # TODO? ROPE should be fine?
             inputs_embeds=embeds,
-            output_hidden_states=True,
+            output_hidden_states=(not training),
             return_dict=True,
             use_cache=(not training),
         )
-        hidden_states = tfmr_out.hidden_states[-1]  # final tfmr layer output, (B, seq, dim)
+        hidden_states = tfmr_out.last_hidden_state if training else tfmr_out.hidden_states[-1]  # (B, seq, dim)
 
         # post-processing: splice out text and speech parts of hidden states
         len_text = text_tokens.size(1)

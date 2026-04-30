@@ -278,6 +278,13 @@ def train(args):
     
     optimizer = AdamW(t3.parameters(), lr=args.lr)
     
+    # Gradient checkpointing: recompute activations during backward to save ~60% memory
+    if device.type == "cuda":
+        t3_model = t3.module if args.distributed else t3
+        t3_model.tfmr.gradient_checkpointing_enable()
+        if rank == 0:
+            print("🧠 Gradient checkpointing enabled")
+    
     # Mixed precision for memory savings (critical for T4 GPUs)
     use_amp = args.fp16 and device.type == "cuda"
     scaler = GradScaler("cuda", enabled=use_amp) if use_amp else None
