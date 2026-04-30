@@ -23,6 +23,7 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LinearLR
@@ -277,6 +278,12 @@ def train(args):
     
     optimizer = AdamW(t3.parameters(), lr=args.lr)
     
+    # Mixed precision for memory savings (critical for T4 GPUs)
+    use_amp = args.fp16 and device.type == "cuda"
+    scaler = GradScaler("cuda", enabled=use_amp) if use_amp else None
+    if use_amp and rank == 0:
+        print("⚡ Mixed precision (float16) enabled")
+    
     start_epoch = 0
     if args.resume_t3_weights:
         import re
@@ -309,25 +316,33 @@ def train(args):
                 emotion_adv=0.5 * torch.ones(text_tokens.size(0), 1, 1, device=device)
             )
             
-            loss_text, loss_speech = t3.module.loss(
-                t3_cond=t3_cond,
-                text_tokens=text_tokens,
-                text_token_lens=text_token_lens,
-                speech_tokens=speech_tokens,
-                speech_token_lens=speech_token_lens
-            ) if args.distributed else t3.loss(
-                t3_cond=t3_cond,
-                text_tokens=text_tokens,
-                text_token_lens=text_token_lens,
-                speech_tokens=speech_tokens,
-                speech_token_lens=speech_token_lens
-            )
+            with autocast("cuda", enabled=use_amp, dtype=torch.float16):
+                loss_text, loss_speech = t3.module.loss(
+                    t3_cond=t3_cond,
+                    text_tokens=text_tokens,
+                    text_token_lens=text_token_lens,
+                    speech_tokens=speech_tokens,
+                    speech_token_lens=speech_token_lens
+                ) if args.distributed else t3.loss(
+                    t3_cond=t3_cond,
+                    text_tokens=text_tokens,
+                    text_token_lens=text_token_lens,
+                    speech_tokens=speech_tokens,
+                    speech_token_lens=speech_token_lens
+                )
             
             loss = (loss_text + loss_speech) / args.accum_steps
-            loss.backward()
+            if scaler:
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
             
             if (i + 1) % args.accum_steps == 0 or (i + 1) == len(dataloader):
-                optimizer.step()
+                if scaler:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             
             if rank == 0:
@@ -342,10 +357,13 @@ def train(args):
                         "lr": optimizer.param_groups[0]['lr']
                     })
             
-            # Memory Fixes for M2 Max
+            # Memory cleanup
             del loss, loss_text, loss_speech, t3_cond
-            if i % 10 == 0 and device.type == "mps":
-                torch.mps.empty_cache()
+            if i % 10 == 0:
+                if device.type == "mps":
+                    torch.mps.empty_cache()
+                elif device.type == "cuda":
+                    torch.cuda.empty_cache()
             
         # Save checkpoint and generate sample
         if rank == 0 and epoch % args.save_every == 0:
@@ -461,6 +479,7 @@ if __name__ == "__main__":
     parser.add_argument("--skip_hi_init", action="store_true", help="Skip initializing Nepali weights from Hindi (helps with accent if you have enough data)")
     parser.add_argument("--no_wandb", action="store_true", help="Disable Weights & Biases logging")
     parser.add_argument("--distributed", action="store_true", help="Enable distributed training (DDP)")
+    parser.add_argument("--fp16", action="store_true", help="Enable float16 mixed precision (saves ~40%% GPU memory)")
     parser.add_argument("--push_to_hub", type=str, help="Hugging Face repo ID to push checkpoints to (e.g. officialuser/chatterbox-nepali)")
     
     args = parser.parse_args()
