@@ -16,6 +16,7 @@ import torch
 import librosa
 import gradio as gr
 from pathlib import Path
+from huggingface_hub import hf_hub_download
 
 sys.path.append(str(Path("src").absolute()))
 
@@ -28,8 +29,8 @@ print(f"🚀 Running on device: {DEVICE}")
 # --- Global State ---
 MODEL = None
 BASE_T3_STATE = None
-FINETUNE_T3_STATE = None
-CURRENT_MODEL_TYPE = None  # "base" or "nepali-finetune"
+FINETUNE_STATES = {}  # { "nepali-epoch-30": state, "nepali-epoch-40": state }
+CURRENT_MODEL_TYPE = "base"
 
 LANGUAGE_CONFIG = {
     "ne": {"text": "नमस्ते, मेरो नाम चैटरबक्स हो। म नेपालीमा बोल्न सक्छु।"},
@@ -57,14 +58,23 @@ def get_or_load_model():
     print("✅ Base weights cached.")
 
     # Cache Nepali fine-tuned weights
-    cache_dir = Path(os.path.expanduser("~")) / ".cache" / "huggingface" / "hub" / "models--Firoj112--chatterbox-nepali-runs"
-    weight_files = list(cache_dir.glob("**/t3_nepali_epoch_30.pt"))
-    if weight_files:
-        raw = torch.load(str(weight_files[0]), map_location='cpu', weights_only=True)
-        FINETUNE_T3_STATE = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in raw.items()}
-        print(f"✅ Nepali fine-tuned weights cached from: {weight_files[0]}")
-    else:
-        print("⚠️ Nepali fine-tuned weights not found. Only base model available.")
+    REPO_ID = "Firoj112/chatterbox-nepali-runs"
+    CHECKPOINTS = {
+        "nepali-epoch-30": "t3_nepali_epoch_30.pt",
+        "nepali-epoch-40": "t3_nepali_epoch_40.pt",
+        "nepali-epoch-45": "t3_nepali_epoch_45.pt",
+    }
+
+    for name, filename in CHECKPOINTS.items():
+        try:
+            # This will use cached file if available, or download if missing
+            print(f"Loading weights for {name} ({filename})...")
+            path = hf_hub_download(repo_id=REPO_ID, filename=filename)
+            raw = torch.load(path, map_location='cpu', weights_only=True)
+            FINETUNE_STATES[name] = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in raw.items()}
+            print(f"✅ {name} weights cached.")
+        except Exception as e:
+            print(f"⚠️ Could not load {name}: {e}")
 
     CURRENT_MODEL_TYPE = "base"
     print(f"Model ready on {MODEL.device} | Active: base")
@@ -79,15 +89,14 @@ def switch_model(model_type):
     if model_type == CURRENT_MODEL_TYPE:
         return f"Already active: {model_type}"
 
-    if model_type == "nepali-finetune":
-        if FINETUNE_T3_STATE is None:
-            return "❌ Fine-tuned weights not found!"
-        model.t3.load_state_dict(FINETUNE_T3_STATE, strict=False)
+    if model_type in FINETUNE_STATES:
+        state = FINETUNE_STATES[model_type]
+        model.t3.load_state_dict(state, strict=False)
         model.t3.to(DEVICE).eval()
         model.t3.compiled = False
-        CURRENT_MODEL_TYPE = "nepali-finetune"
-        print("🔄 Switched to: Nepali Fine-tune")
-        return "✅ Active: Nepali Fine-tune"
+        CURRENT_MODEL_TYPE = model_type
+        print(f"🔄 Switched to: {model_type}")
+        return f"✅ Active: {model_type}"
 
     elif model_type == "base":
         model.t3.load_state_dict(BASE_T3_STATE, strict=True)
@@ -233,11 +242,12 @@ with gr.Blocks() as demo:
     with gr.Row():
         with gr.Column():
             # Model Selector
+            choices = ["base"] + list(FINETUNE_STATES.keys())
             model_selector = gr.Radio(
-                choices=["base", "nepali-finetune"],
-                value="base",
+                choices=choices,
+                value=CURRENT_MODEL_TYPE,
                 label="🧠 Model",
-                info="Base = original multilingual v2 | Nepali Fine-tune = base + epoch-30 Nepali weights"
+                info="Select model checkpoint: base (multilingual) or fine-tuned Nepali epochs"
             )
             model_status = gr.Textbox(
                 value="✅ Active: Base (Multilingual v2)",
@@ -265,9 +275,13 @@ with gr.Blocks() as demo:
                 glob.glob("samples/*.wav") + glob.glob("samples/*.mp3") +
                 glob.glob("*.wav") + glob.glob("*.mp3")
             )
+            # Prioritize Prakash.mp3 if it exists
+            prakash_ref = next((r for r in available_refs if "Prakash" in r), None)
+            default_ref = prakash_ref if prakash_ref else (available_refs[0] if available_refs else None)
+
             ref_dropdown = gr.Dropdown(
                 choices=available_refs,
-                value=available_refs[0] if available_refs else None,
+                value=default_ref,
                 label="🎤 Reference Voice",
                 info="Select from available audio files"
             )
@@ -290,7 +304,7 @@ with gr.Blocks() as demo:
                 value=0.25
             )
             cfg_weight = gr.Slider(
-                minimum=0.0, maximum=3.0, value=1.2, step=0.1,
+                minimum=0.0, maximum=3.0, value=0.8, step=0.1,
                 label="CFG / Pace (Higher = stricter accent, but speaks faster)",
             )
 

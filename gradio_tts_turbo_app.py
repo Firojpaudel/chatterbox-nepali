@@ -2,6 +2,7 @@ import random
 import numpy as np
 import torch
 import gradio as gr
+from pathlib import Path
 from chatterbox.tts_turbo import ChatterboxTurboTTS
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -139,11 +140,15 @@ with gr.Blocks(title="Chatterbox Turbo", css=CUSTOM_CSS) as demo:
                         js=INSERT_TAG_JS
                     )
 
+            ref_path = "samples/Prakash.mp3"
+            if not Path(ref_path).exists():
+                ref_path = "https://storage.googleapis.com/chatterbox-demo-samples/prompts/female_random_podcast.wav"
+
             ref_wav = gr.Audio(
                 sources=["upload", "microphone"],
                 type="filepath",
                 label="Reference Audio File",
-                value="https://storage.googleapis.com/chatterbox-demo-samples/prompts/female_random_podcast.wav"
+                value=ref_path
             )
 
             run_btn = gr.Button("Generate ⚡", variant="primary")
