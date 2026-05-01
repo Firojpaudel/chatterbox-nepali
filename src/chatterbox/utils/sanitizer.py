@@ -1,11 +1,18 @@
 import re
 
-# --- NEPALI CONFIG ---
+# --- CONFIG ---
 ACRONYM_MAP_NE = {
     'A': 'ए', 'B': 'बी', 'C': 'सी', 'D': 'डी', 'E': 'ई', 'F': 'एफ', 'G': 'जी',
     'H': 'यच', 'I': 'आइ', 'J': 'जे', 'K': 'के', 'L': 'एल', 'M': 'एम', 'N': 'एन',
     'O': 'ओ', 'P': 'पी', 'Q': 'क्यू', 'R': 'आर', 'S': 'एस', 'T': 'टी', 'U': 'यू',
     'V': 'भी', 'W': 'डब्लू', 'X': 'एक्स', 'Y': 'वाई', 'Z': 'जेड'
+}
+
+ACRONYM_MAP_EN = {
+    'A': 'ay', 'B': 'bee', 'C': 'see', 'D': 'dee', 'E': 'ee', 'F': 'ef', 'G': 'gee',
+    'H': 'aitch', 'I': 'eye', 'J': 'jay', 'K': 'kay', 'L': 'el', 'M': 'em', 'N': 'en',
+    'O': 'oh', 'P': 'pee', 'Q': 'cue', 'R': 'ar', 'S': 'ess', 'T': 'tee', 'U': 'you',
+    'V': 'vee', 'W': 'double-u', 'X': 'ex', 'Y': 'why', 'Z': 'zee'
 }
 
 NEPALI_NUMS = {
@@ -21,29 +28,13 @@ NEPALI_NUMS = {
     90: 'नब्बे', 91: 'एकानब्बे', 92: 'बयानब्बे', 93: 'त्रियानब्बे', 94: 'चौरानब्बे', 95: 'पन्चानब्बे', 96: 'छयानब्बे', 97: 'सन्तानब्बे', 98: 'अन्ठानब्बे', 99: 'उनन्सय'
 }
 
-ACRONYM_MAP_EN = {
-    'A': 'ay', 'B': 'bee', 'C': 'see', 'D': 'dee', 'E': 'ee', 'F': 'ef', 'G': 'gee',
-    'H': 'aitch', 'I': 'eye', 'J': 'jay', 'K': 'kay', 'L': 'el', 'M': 'em', 'N': 'en',
-    'O': 'oh', 'P': 'pee', 'Q': 'cue', 'R': 'ar', 'S': 'ess', 'T': 'tee', 'U': 'you',
-    'V': 'vee', 'W': 'double-u', 'X': 'ex', 'Y': 'why', 'Z': 'zee'
-}
-
-# --- ENGLISH CONFIG ---
 ENGLISH_ONES = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
 ENGLISH_TEENS = ["ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"]
 ENGLISH_TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
 
-ENGLISH_ORDINALS = {
-    "1st": "first", "2nd": "second", "3rd": "third", "4th": "fourth", "5th": "fifth",
-    "6th": "sixth", "7th": "seventh", "8th": "eighth", "9th": "ninth", "10th": "tenth",
-    "11th": "eleventh", "12th": "twelfth", "13th": "thirteenth", "20th": "twentieth",
-}
-
-NEPALI_ORDINALS = {
-    "१औं": "पहिलो", "२औं": "दोस्रो", "३औं": "तेस्रो", "४औं": "चौथो", "५औं": "पाँचौं",
-    "६औं": "छैटौं", "७औं": "सातौं", "८औं": "आठौं", "९औं": "नवौं", "१०औं": "दशौं",
-    "१st": "पहिलो", "२nd": "दोस्रो", "३rd": "तेस्रो", "४th": "चौथो",
-}
+NEPALI_DIGITS = "०१२३४५६७८९"
+ENGLISH_DIGITS = "0123456789"
+DIGIT_MAP = str.maketrans(NEPALI_DIGITS, ENGLISH_DIGITS)
 
 def number_to_nepali(n):
     if n < 100: return NEPALI_NUMS.get(n, str(n))
@@ -93,144 +84,109 @@ def number_to_english(n):
         millions, rem = divmod(n, 1000000)
         res = number_to_english(millions) + " million"
         return res + " " + number_to_english(rem) if rem > 0 else res
-    if n < 1000000000000:
-        billions, rem = divmod(n, 1000000000)
-        res = number_to_english(billions) + " billion"
-        return res + " " + number_to_english(rem) if rem > 0 else res
-    if n < 1000000000000000:
-        trillions, rem = divmod(n, 1000000000000)
-        res = number_to_english(trillions) + " trillion"
-        return res + " " + number_to_english(rem) if rem > 0 else res
     return str(n)
 
-NEPALI_DIGITS = "०१२३४५६७८९"
-ENGLISH_DIGITS = "0123456789"
-DIGIT_MAP = str.maketrans(NEPALI_DIGITS, ENGLISH_DIGITS)
-
 def sanitize_numbers(num_str, lang="ne"):
-    """Converts a number string (decimal or whole) to words."""
     num_str = num_str.translate(DIGIT_MAP).replace(",", "")
-    
     if "." in num_str:
         parts = num_str.split(".", 1)
         whole = parts[0] if parts[0] else "0"
         frac = parts[1]
-        
-        whole_val = int(whole)
-        whole_text = number_to_nepali(whole_val) if lang == "ne" else number_to_english(whole_val)
-        
+        whole_text = number_to_nepali(int(whole)) if lang == "ne" else number_to_english(int(whole))
         point_word = "दशमलव" if lang == "ne" else "point"
-        
-        frac_words = []
-        for d in frac:
-            d_val = int(d)
-            word = NEPALI_NUMS[d_val] if lang == "ne" else ENGLISH_ONES[d_val]
-            if not word: word = "zero" # handle 0 in fraction for english
-            frac_words.append(word)
-            
+        frac_words = [NEPALI_NUMS[int(d)] if lang == "ne" else ENGLISH_ONES[int(d)] for d in frac]
         return f"{whole_text} {point_word} {' '.join(frac_words)}"
-    else:
-        try:
-            val = int(num_str)
-            return number_to_nepali(val) if lang == "ne" else number_to_english(val)
-        except:
-            return num_str
+    try:
+        val = int(num_str)
+        return number_to_nepali(val) if lang == "ne" else number_to_english(val)
+    except:
+        return num_str
 
 def sanitize_text(text, lang="ne"):
-    # 0. Ordinals (1st, 2nd, १औं, २औं)
-    if lang == "ne":
-        ordinal_ne_regex = r'([०-९0-9,]+)(औं|औ|st|nd|rd|th)'
-        def replace_ordinal_ne(match):
-            full = match.group(0)
-            if full in NEPALI_ORDINALS:
-                return NEPALI_ORDINALS[full]
-            # Handle mixed digits and commas
-            norm_full = full.translate(DIGIT_MAP).replace(",", "")
-            # Try mapping with normalized digits (e.g. 1st)
-            if norm_full in ENGLISH_ORDINALS:
-                pass
-            num_str = match.group(1)
-            sanitized_num = sanitize_numbers(num_str, lang="ne")
-            return f"{sanitized_num}औं"
-        text = re.sub(ordinal_ne_regex, replace_ordinal_ne, text)
-    else:
-        ordinal_en_regex = r'\b([0-9,]+)(st|nd|rd|th)\b'
-        def replace_ordinal_en(match):
-            full = match.group(0).lower().replace(",", "")
-            if full in ENGLISH_ORDINALS:
-                return ENGLISH_ORDINALS[full]
-            
-            num_str = match.group(1).replace(",", "")
-            val = int(num_str)
-            last_digit = val % 10
-            last_two = val % 100
-            
-            # Special handling for 21st, 22nd, 33rd, etc.
-            if last_digit == 1 and last_two != 11:
-                base = sanitize_numbers(str(val - 1), lang="en")
-                return f"{base}-first" if base != "zero" else "first"
-            if last_digit == 2 and last_two != 12:
-                base = sanitize_numbers(str(val - 2), lang="en")
-                return f"{base}-second" if base != "zero" else "second"
-            if last_digit == 3 and last_two != 13:
-                base = sanitize_numbers(str(val - 3), lang="en")
-                return f"{base}-third" if base != "zero" else "third"
-
-            sanitized_num = sanitize_numbers(num_str, lang="en")
-            if sanitized_num.endswith("y"):
-                return sanitized_num[:-1] + "ieth"
-            return f"{sanitized_num}th"
-        text = re.sub(ordinal_en_regex, replace_ordinal_en, text)
-
-    # 1. Unified Currencies (Rs. 100, रु १००, १०० रुपैयाँ, रु १०० रुपैयाँ)
-    # This regex looks for (Optional Prefix) (Number) (Optional Suffix)
-    # We only treat it as currency if at least one symbol/word is present.
-    currency_regex = r'(Rs\.?|रू\.?|रु\.?)?\s?([0-9०-९,]+(?:\.[0-9०-९,]+)?)\s?(रुपैयाँ|रुपिया|रुपियाँ|rupees|rupee)?'
+    # 1. Immediate whitespace cleanup (CRITICAL: prevents \n being read as 'n')
+    text = text.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
     
-    def replace_currency(match):
-        prefix = match.group(1)
-        num_str = match.group(2)
-        suffix = match.group(3)
+    # 2. Markdown removal
+    text = re.sub(r'[*_]{1,3}', '', text)
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+    text = re.sub(r'^[#>\-\+\*]\s+', '', text, flags=re.MULTILINE)
+
+    # 3. Units mapping (Number + Unit)
+    units = {
+        'm': ('मिटर', 'meters'), 'km': ('किलोमिटर', 'kilometers'),
+        'kg': ('किलोग्राम', 'kilograms'), 'cm': ('सेन्टिमिटर', 'centimeters'),
+        'ft': ('फिट', 'feet'), 'in': ('इन्च', 'inches'),
+        'g': ('ग्राम', 'grams'), 'l': ('लिटर', 'liters'),
+    }
+    for unit, (ne_word, en_word) in units.items():
+        pattern = rf'([0-9०-९,.]+)\s?{unit}\b'
+        word = ne_word if lang == "ne" else en_word
+        text = re.sub(pattern, lambda m: f"{sanitize_numbers(m.group(1), lang)} {word}", text)
+
+    # 4. Symbols
+    text = re.sub(r'([0-9०-९,.]+)\s?%', lambda m: f"{sanitize_numbers(m.group(1), lang)} प्रतिशत", text)
+    symbol_map = {'&': 'र', '@': 'एट', '#': 'ह्यास', '$': 'डलर', '/': 'स्ल्याश'}
+    for sym, word in symbol_map.items():
+        text = text.replace(sym, f" {word} ")
+
+    # 5. Time (10:30 AM)
+    time_regex = r'\b([0-9०-९]{1,2}):([0-9०-९]{2})\s?(AM|PM|am|pm)?\b'
+    def replace_time(match):
+        h, m, suffix = match.group(1), match.group(2), (match.group(3) or "").upper()
+        h_word, m_word = sanitize_numbers(h, lang), sanitize_numbers(m, lang)
+        if suffix:
+            suffix_word = " ".join([ACRONYM_MAP_EN.get(c, c) for c in suffix])
+            return f"{h_word} {m_word} {suffix_word}"
+        return f"{h_word} {m_word}"
+    text = re.sub(time_regex, replace_time, text)
+
+    # 6. Phone Numbers (Pairs)
+    # Flexible regex to catch Nepali mobile/landline with optional hyphens/spaces
+    phone_regex = r'\b((?:98|97|96)[0-9०-९\s-]{8,11}|0[1-9][0-9०-९\s-]{6,10})\b'
+    def replace_phone(match):
+        raw = match.group(0)
+        # Only treat as phone if it has a reasonable number of digits (8-10)
+        digits = raw.translate(DIGIT_MAP).replace("-", "").replace(" ", "")
+        if not (7 <= len(digits) <= 11): return raw
         
-        # If neither prefix nor suffix exists, it's just a normal number, let it be handled by step 2
-        if not prefix and not suffix:
-            return match.group(0)
-            
-        sanitized_num = sanitize_numbers(num_str, lang)
-        # Use the existing suffix if present, otherwise default to "रुपैयाँ"/"rupees"
-        word = suffix if suffix else ("रुपैयाँ" if lang == "ne" else "rupees")
-        return f"{sanitized_num} {word}"
-    
+        res, i = [], 0
+        while i < len(digits):
+            if i + 1 < len(digits):
+                pair_str = digits[i:i+2]
+                if pair_str[0] == "0":
+                    res.append(f"शून्य {NEPALI_NUMS[int(pair_str[1])]}")
+                else:
+                    res.append(number_to_nepali(int(pair_str)))
+                i += 2
+            else:
+                res.append(NEPALI_NUMS[int(digits[i])]); i += 1
+        return " " + " ".join(res) + " "
+    text = re.sub(phone_regex, replace_phone, text)
+
+    # 7. Unified Currencies
+    currency_regex = r'(Rs\.?|रू\.?|रु\.?)?\s?([0-9०-९,]+(?:\.[0-9०-९,]+)?)\s?(रुपैयाँ|rupees)?'
+    def replace_currency(match):
+        if not match.group(1) and not match.group(3): return match.group(0)
+        return f" {sanitize_numbers(match.group(2), lang)} रुपैयाँ "
     text = re.sub(currency_regex, replace_currency, text)
 
-    # 2. Decimal and Whole Numbers (that were not caught as currencies)
-    number_regex = r'\b[0-9०-९,]+(?:\.[0-9०-९,]+)?\b'
-    def replace_general_number(match):
-        return sanitize_numbers(match.group(0), lang)
-        
-    text = re.sub(number_regex, replace_general_number, text)
+    # 8. Remaining Numbers
+    text = re.sub(r'\b[0-9०-९,]+(?:\.[0-9०-९,]+)?\b', lambda m: sanitize_numbers(m.group(0), lang), text)
 
-    # 3. Acronyms (2+ Caps letters)
+    # 9. Acronyms (Capitalize single letters first, then map)
+    text = re.sub(r'\b([a-z])\b', lambda m: m.group(1).upper(), text)
     def replace_acronym(match):
-        acronym = match.group(0)
-        if lang == "ne":
-            return " ".join([ACRONYM_MAP_NE.get(char, char) for char in acronym])
-        else:
-            return " ".join([ACRONYM_MAP_EN.get(char, char) for char in acronym])
-    
-    text = re.sub(r'\b[A-Z]{2,}\b', replace_acronym, text)
-    
-    # Final cleanup of extra spaces
+        acro, suff = match.group(1), match.group(2) or ""
+        if lang == "en" and acro == "A" and not suff: return match.group(0)
+        mapped = " ".join([ACRONYM_MAP_NE.get(c, c) for c in acro])
+        return f"{mapped}{suff}"
+    text = re.sub(r'\b([A-Z]{1,})([अ-ञा-्]*)\b', replace_acronym, text)
+
+    # 10. FINAL SAFETY CLEANUP (Full Devanagari range \u0900-\u097F)
+    text = re.sub(r'[^a-zA-Z0-9\u0900-\u097F\s।\.?!]', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
 if __name__ == "__main__":
-    test_cases = [
-        ("Rs. 1.8", "en"),
-        ("रु १.८", "ne"),
-        ("150.50 रुपैयाँ", "ne"),
-        ("The value is 1.8 and costs Rs. 500", "en"),
-        ("यसको मूल्य १.८ छ र रु ५०० पर्छ।", "ne"),
-    ]
-    for t, l in test_cases:
-        print(f"[{l}] '{t}' -> '{sanitize_text(t, lang=l)}'")
+    example = "नेपाल दक्षिण एसियामा अवस्थित देश हो।\nयसको जनसंख्या ३ करोड छ। 9841-456132 नम्बरमा सम्पर्क गर्नुहोस्।"
+    print(sanitize_text(example, lang="ne"))

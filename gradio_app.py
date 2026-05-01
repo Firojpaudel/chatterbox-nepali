@@ -1,373 +1,288 @@
-"""
-Chatterbox Nepali TTS - Gradio App
-Two modes:
-  - Base (multilingual v2) — original 23-language model
-  - Nepali Fine-tune — same model + epoch-30 Nepali weights
-"""
-
 import os
 import sys
 import re
-import random
-import glob
 import time
-import numpy as np
-import torch
+import random
 import librosa
+import torch
+import numpy as np
 import gradio as gr
 from pathlib import Path
 from huggingface_hub import hf_hub_download
+from safetensors.torch import load_file as load_safetensors
 
-sys.path.append(str(Path("src").absolute()))
+# =========================================================================
+# FORCE LOCAL CODE USAGE (DO NOT REMOVE)
+# =========================================================================
+CURRENT_DIR = os.getcwd()
+SRC_PATH = os.path.join(CURRENT_DIR, "src")
+if SRC_PATH not in sys.path:
+    sys.path.insert(0, SRC_PATH)
 
-from chatterbox.mtl_tts import ChatterboxMultilingualTTS, SUPPORTED_LANGUAGES
+import chatterbox.utils.sanitizer as sanitizer
 from chatterbox.utils.sanitizer import sanitize_text
+from chatterbox.mtl_tts import ChatterboxMultilingualTTS, Conditionals
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"Running on device: {DEVICE}")
+print(f"--- STARTUP CONFIG ---")
+print(f"DEBUG: Using sanitizer from: {sanitizer.__file__}")
+# =========================================================================
 
-# --- Global State ---
-MODEL = None
-BASE_T3_STATE = None
-FINETUNE_STATES = {}  # { "nepali-epoch-30": state, "nepali-epoch-40": state }
-CURRENT_MODEL_TYPE = "base"
-
-LANGUAGE_CONFIG = {
-    "ne": {"text": "नमस्ते, मेरो नाम चैटरबक्स हो। म नेपालीमा बोल्न सक्छु।"},
-    "en": {"text": "Hello, this is Chatterbox TTS fine-tuned for Nepali with thirty epochs of training."},
-    "hi": {"text": "नमस्ते, यह चैटरबॉक्स टीटीएस है।"},
+# Model path config
+REPO_ID = "Firoj112/chatterbox-nepali-runs"
+CHECKPOINTS = {
+    "nepali-epoch-30": "t3_nepali_epoch_30.pt",
+    "nepali-epoch-40": "t3_nepali_epoch_40.pt",
+    "nepali-epoch-45": "t3_nepali_epoch_45.pt",
+    "nepali-final": "t3_mtl_nepali_final.safetensors"
 }
 
+EVENT_TAGS = [
+    "[clear throat]", "[sigh]", "[shush]", "[cough]", "[groan]",
+    "[sniff]", "[gasp]", "[chuckle]", "[laugh]"
+]
+
+CUSTOM_CSS = """
+.tag-container {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+    margin-top: 5px !important;
+    margin-bottom: 10px !important;
+    border: none !important;
+    background: transparent !important;
+}
+.tag-btn {
+    min-width: fit-content !important;
+    width: auto !important;
+    height: 32px !important;
+    font-size: 13px !important;
+    background: #f1f5f9 !important;
+    border: 1px solid #cbd5e1 !important;
+    color: #334155 !important;
+    border-radius: 6px !important;
+    padding: 0 10px !important;
+    cursor: pointer !important;
+}
+.tag-btn:hover {
+    background: #e2e8f0 !important;
+}
+"""
+
+INSERT_TAG_JS = """
+(tag_val, current_text) => {
+    const textarea = document.querySelector('#main_textbox textarea');
+    if (!textarea) return current_text + " " + tag_val; 
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    let prefix = (start === 0 || current_text[start - 1] === ' ') ? "" : " ";
+    let suffix = (end < current_text.length && current_text[end] === ' ') ? "" : " ";
+    return current_text.slice(0, start) + prefix + tag_val + suffix + current_text.slice(end);
+}
+"""
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+model = None
+BASE_T3_STATE = None
+FINETUNE_STATES = {}
+CURRENT_MODEL_TYPE = "nepali-final"
+
+# Supported Languages mapping
+SUPPORTED_LANGUAGES = {
+    "en": "English", "ne": "Nepali", "hi": "Hindi", "bn": "Bengali",
+    "gu": "Gujarati", "kn": "Kannada", "ml": "Malayalam", "mr": "Marathi",
+    "pa": "Punjabi", "ta": "Tamil", "te": "Telugu"
+}
 
 def get_or_load_model():
-    global MODEL, BASE_T3_STATE, FINETUNE_T3_STATE, CURRENT_MODEL_TYPE
-
-    if MODEL is not None:
-        return MODEL
+    global model, BASE_T3_STATE, FINETUNE_STATES, CURRENT_MODEL_TYPE
+    if model is not None: return model
 
     print("Loading Chatterbox Multilingual v2 base model...")
-    MODEL = ChatterboxMultilingualTTS.from_pretrained(DEVICE)
-    # Speed optimization: float16 for T3 only (the LLM backbone where 99% of compute is)
-    # s3gen and ve must stay float32 — they have internal precision-sensitive ops
-    if DEVICE == "cuda":
-        MODEL.t3.half()
-        print("⚡ Float16 inference enabled (T3 backbone)")
-
-    # Cache base T3 weights
-    BASE_T3_STATE = {k: v.clone().cpu() for k, v in MODEL.t3.state_dict().items()}
-    print("✅ Base weights cached.")
-
-    # Cache Nepali fine-tuned weights
-    REPO_ID = "Firoj112/chatterbox-nepali-runs"
-    CHECKPOINTS = {
-        "nepali-final": "t3_mtl_nepali_final.safetensors",
-        "nepali-epoch-45": "t3_nepali_epoch_45.pt",
-        "nepali-epoch-40": "t3_nepali_epoch_40.pt",
-        "nepali-epoch-30": "t3_nepali_epoch_30.pt",
-    }
+    model = ChatterboxMultilingualTTS.from_pretrained(DEVICE)
+    model.t3.eval()
+    BASE_T3_STATE = {k: v.cpu().clone() for k, v in model.t3.state_dict().items()}
 
     for name, filename in CHECKPOINTS.items():
         try:
-            # This will use cached file if available, or download if missing
-            print(f"Loading weights for {name} ({filename})...")
-            path = hf_hub_download(repo_id=REPO_ID, filename=filename)
+            if not os.path.exists(filename):
+                hf_hub_download(repo_id=REPO_ID, filename=filename, local_dir=".")
             if filename.endswith(".safetensors"):
-                from safetensors.torch import load_file as load_safetensors
-                raw = load_safetensors(path)
+                state = load_safetensors(filename)
             else:
-                raw = torch.load(path, map_location='cpu', weights_only=True)
-            
-            # Remove "patched_model." or "model." prefix if present
-            state_dict = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in raw.items()}
-            FINETUNE_STATES[name] = state_dict
-            print(f"DONE: {name} weights cached.")
+                state = torch.load(filename, map_location="cpu", weights_only=True)
+            clean_state = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in state.items()}
+            FINETUNE_STATES[name] = clean_state
         except Exception as e:
-            print(f"ERROR: Could not load {name}: {e}")
+            print(f"Skipping {name}: {e}")
 
-    # Set default model: prefer nepali-final, then epoch-45, then base
-    if "nepali-final" in FINETUNE_STATES:
+    if "nepali-final" in FINETUNE_STATES: 
+        model.t3.load_state_dict(FINETUNE_STATES["nepali-final"], strict=False)
         CURRENT_MODEL_TYPE = "nepali-final"
-        MODEL.t3.load_state_dict(FINETUNE_STATES["nepali-final"], strict=False)
-        print("Active: nepali-final")
-    elif "nepali-epoch-45" in FINETUNE_STATES:
-        CURRENT_MODEL_TYPE = "nepali-epoch-45"
-        MODEL.t3.load_state_dict(FINETUNE_STATES["nepali-epoch-45"], strict=False)
-        print("Active: nepali-epoch-45")
-    else:
-        CURRENT_MODEL_TYPE = "base"
-        print("Active: base")
-
-    print(f"Model ready on {MODEL.device}")
-    return MODEL
-
+    return model
 
 def switch_model(model_type):
-    global CURRENT_MODEL_TYPE
-
-    model = get_or_load_model()
-
-    if model_type == CURRENT_MODEL_TYPE:
-        return f"Already active: {model_type}"
-
+    global CURRENT_MODEL_TYPE, model
+    if model is None: return "Model not loaded"
     if model_type in FINETUNE_STATES:
-        state = FINETUNE_STATES[model_type]
-        model.t3.load_state_dict(state, strict=False)
+        model.t3.load_state_dict(FINETUNE_STATES[model_type], strict=False)
         model.t3.to(DEVICE).eval()
         model.t3.compiled = False
         CURRENT_MODEL_TYPE = model_type
-        print(f"🔄 Switched to: {model_type}")
-        return f"✅ Active: {model_type}"
-
+        return f"Active: {model_type}"
     elif model_type == "base":
         model.t3.load_state_dict(BASE_T3_STATE, strict=True)
         model.t3.to(DEVICE).eval()
         model.t3.compiled = False
         CURRENT_MODEL_TYPE = "base"
-        print("🔄 Switched to: Base")
-        return "✅ Active: Base (Multilingual v2)"
-
+        return "Active: Base"
     return f"Unknown: {model_type}"
 
-
-# Pre-load
-try:
-    get_or_load_model()
-except Exception as e:
-    print(f"CRITICAL: {e}")
-
-
-def set_seed(seed):
-    torch.manual_seed(seed)
-    if DEVICE == "cuda":
-        torch.cuda.manual_seed_all(seed)
-    random.seed(seed)
-    np.random.seed(seed)
-
-
-def smart_chunk(text):
-    """Split text strictly on sentence boundaries to preserve natural prosody."""
-    # Split on sentence boundaries
-    chunks = re.split(r'([।\.?!\n])', text)
-    raw = []
-    for i in range(0, len(chunks) - 1, 2):
-        raw.append((chunks[i] + chunks[i + 1]).strip())
-    if len(chunks) % 2 == 1 and chunks[-1].strip():
-        raw.append(chunks[-1].strip())
-
-    # Merge extremely short chunks (like "हो।") to the previous sentence if possible
-    processed = []
-    buf = ""
-    for s in raw:
-        if len(buf + s) < 20:
-            buf += s + " "
-        else:
-            processed.append((buf + s).strip())
-            buf = ""
-    if buf:
-        if processed:
-            processed[-1] += " " + buf.strip()
-        else:
-            processed.append(buf.strip())
-            
-    return processed if processed else [text]
-
+def smart_chunk(text, max_chars=120):
+    raw_chunks = re.split(r'([।\.?!\n])', text)
+    final_chunks = []
+    for i in range(0, len(raw_chunks)-1, 2):
+        sentence = (raw_chunks[i] + raw_chunks[i+1]).strip()
+        if not sentence: continue
+        if len(sentence) > max_chars:
+            sub_chunks = re.split(r'([,])', sentence)
+            if len(sub_chunks) > 1:
+                for j in range(0, len(sub_chunks)-1, 2):
+                    sub = (sub_chunks[j] + sub_chunks[j+1]).strip()
+                    if sub: final_chunks.append(sub)
+                if len(sub_chunks) % 2 != 0 and sub_chunks[-1].strip():
+                    final_chunks.append(sub_chunks[-1].strip())
+            else:
+                words = sentence.split(' '); mid = len(words) // 2
+                if mid > 0:
+                    final_chunks.append(" ".join(words[:mid]))
+                    final_chunks.append(" ".join(words[mid:]))
+                else: final_chunks.append(sentence)
+        else: final_chunks.append(sentence)
+    if len(raw_chunks) % 2 != 0 and raw_chunks[-1].strip():
+        final_chunks.append(raw_chunks[-1].strip())
+    return final_chunks
 
 def generate_tts_audio(
     text_input, language_id, ref_dropdown_input, audio_prompt_input,
     exaggeration_input, cfg_weight_input, temperature_input,
-    seed_num_input, enable_sanitizer, enable_chunking, speed_input
+    seed_num_input, enable_sanitizer, enable_chunking, speed_input,
+    repetition_penalty_input, top_p_input, min_p_input
 ):
     model = get_or_load_model()
-    if model is None:
-        raise RuntimeError("No model loaded.")
-
-    if seed_num_input and int(seed_num_input) != 0:
-        set_seed(int(seed_num_input))
-
-    # Resolve audio prompt: uploaded takes priority
-    audio_prompt = audio_prompt_input or ref_dropdown_input
-    if not audio_prompt:
-        raise gr.Error("❌ Please select or upload a reference audio.")
-    print(f"Using reference: {audio_prompt}")
-
-    # Sanitize
+    ref_path = audio_prompt_input or os.path.join("samples", ref_dropdown_input)
+    if not os.path.exists(ref_path): ref_path = "samples/Prakash.mp3"
+    
     if enable_sanitizer:
         text_input = sanitize_text(text_input, lang=language_id)
-        print(f"Sanitized ({language_id}): {text_input}")
+        print(f"\n✨ \033[94mSanitized Text:\033[0m {text_input}")
+    
+    chunks = smart_chunk(text_input) if enable_chunking else [text_input]
+    print(f"\n📦 \033[92mSplit into {len(chunks)} chunk(s). Starting synthesis...\033[0m")
 
-    # Chunk text to prevent OOM/slowdown on massive paragraphs,
-    # but ONLY chunk on natural sentence boundaries (as defined in smart_chunk)
-    if enable_chunking and len(text_input) > 80:
-        chunks = smart_chunk(text_input)
-    else:
-        chunks = [text_input]
+    model.prepare_conditionals(wav_fpath=ref_path, exaggeration=exaggeration_input)
+    
+    if seed_num_input != 0:
+        set_seed(int(seed_num_input))
 
-    print(f"[{CURRENT_MODEL_TYPE}] Processing {len(chunks)} chunk(s)...")
     all_wavs = []
-    start = time.time()
-
-    # Pre-compute reference audio conditionals ONCE (instead of per-chunk)
-    model.prepare_conditionals(audio_prompt, exaggeration=exaggeration_input)
-    print(f"  Reference audio processed.")
-
+    total_start = time.time()
+    
     for i, chunk in enumerate(chunks):
-        print(f"  [{i+1}/{len(chunks)}] {chunk}")
-        # Give the model plenty of tokens to finish the sentence safely
-        estimated_tokens = min(len(chunk) * 6 + 150, 1000)
-        estimated_tokens = max(estimated_tokens, 200)
+        if not chunk.strip(): continue
         
-        with torch.inference_mode():
+        chunk_start = time.time()
+        print(f"\n🎙️  \033[93m[Processing Chunk {i+1}/{len(chunks)}]\033[0m")
+        print(f"   \" {chunk.strip()[:100]}... \"")
+        
+        # Add tiny trailing space
+        if not chunk.endswith(" "): chunk += " "
+        
+        with torch.no_grad():
             wav = model.generate(
-                chunk,
-                language_id=language_id,
-                # Don't pass audio_prompt_path — conditionals already cached
-                exaggeration=exaggeration_input,
-                cfg_weight=cfg_weight_input,
-                temperature=temperature_input,
-                max_new_tokens=estimated_tokens,
+                chunk, language_id=language_id, exaggeration=exaggeration_input,
+                cfg_weight=cfg_weight_input, temperature=temperature_input,
+                repetition_penalty=repetition_penalty_input, top_p=top_p_input,
+                min_p=min_p_input, max_new_tokens=max(128, int(len(chunk) * 4))
             )
             all_wavs.append(wav.squeeze(0).cpu().numpy())
+        
+        chunk_elapsed = time.time() - chunk_start
+        print(f"   ✅ \033[92mChunk {i+1} done in {chunk_elapsed:.1f}s\033[0m")
 
-    if not all_wavs:
-        raise gr.Error("No audio generated.")
-
-    final_wav = np.concatenate(all_wavs, axis=-1)
-    final_wav, _ = librosa.effects.trim(final_wav, top_db=50)
-
-    # Adjust final audio speed if requested
+    if not all_wavs: return None
+    
+    final_wav = np.concatenate(all_wavs)
     if speed_input != 1.0:
-        # rate > 1.0 speeds up, rate < 1.0 slows down
         final_wav = librosa.effects.time_stretch(final_wav, rate=speed_input)
 
-    elapsed = time.time() - start
-    print(f"DONE in {elapsed:.1f}s | {len(chunks)} chunk(s)")
+    total_elapsed = time.time() - total_start
+    print(f"\n🎉 \033[95mSUCCESS: All {len(chunks)} chunks synthesized in {total_elapsed:.1f}s total!\033[0m\n")
     return (model.sr, final_wav)
-
 
 # ===================== GRADIO UI =====================
 
-with gr.Blocks() as demo:
-    gr.Markdown(
-        """
-        # Nepali Chatterbox TTS
-        Fine-tuned Chatterbox Multilingual v2 for Nepali — with sanitization & smart chunking.
-
-        Based on [ResembleAI/Chatterbox](https://github.com/resemble-ai/chatterbox) | MIT License
-        """
-    )
-
-    lang_display = " • ".join([f"**{name}** (`{code}`)" for code, name in sorted(SUPPORTED_LANGUAGES.items())])
-    gr.Markdown(lang_display)
+with gr.Blocks(title="WiseYak Nepali TTS", css=CUSTOM_CSS) as demo:
+    gr.Markdown("# 🎙️ WiseYak Nepali TTS\nState-of-the-Art Nepali Speech Synthesis")
 
     with gr.Row():
-        with gr.Column():
-            # Model Selector
-            choices = ["base"] + list(FINETUNE_STATES.keys())
-            model_selector = gr.Radio(
-                choices=choices,
-                value=CURRENT_MODEL_TYPE,
-                label="Model",
-                info="Select model checkpoint: base (multilingual) or fine-tuned Nepali epochs"
-            )
-            model_status = gr.Textbox(
-                value=f"Active: {CURRENT_MODEL_TYPE}",
-                label="Model Status",
-                interactive=False
-            )
-
-            # Language
-            language_id = gr.Dropdown(
-                choices=list(SUPPORTED_LANGUAGES.keys()),
-                value="en",
-                label="Language"
-            )
-
-            # Text
+        with gr.Column(scale=2):
             text = gr.Textbox(
-                value=LANGUAGE_CONFIG["en"]["text"],
-                label="Text to synthesize",
-                max_lines=5,
-                placeholder="Type your text here..."
+                label="Text to Synthesize", lines=8, elem_id="main_textbox",
+                value="नेपाल दक्षिण एसियामा अवस्थित एक भूपरिवेष्टित देश हो। यसको जनसंख्या लगभग ३ करोड छ।"
             )
-
-            # Reference audio dropdown
-            available_refs = sorted(
-                glob.glob("samples/*.wav") + glob.glob("samples/*.mp3") +
-                glob.glob("*.wav") + glob.glob("*.mp3")
-            )
-            # Prioritize Prakash.mp3 if it exists
-            prakash_ref = next((r for r in available_refs if "Prakash" in r), None)
-            default_ref = prakash_ref if prakash_ref else (available_refs[0] if available_refs else None)
-
-            ref_dropdown = gr.Dropdown(
-                choices=available_refs,
-                value=default_ref,
-                label="Reference Voice",
-                info="Select from available audio files"
-            )
-
-            # Custom upload
-            ref_wav = gr.Audio(
-                sources=["upload", "microphone"],
-                type="filepath",
-                label="OR Upload / Record Custom Reference (5-10s)",
-            )
-
-            gr.Markdown(
-                "💡 **Tip**: Lower CFG = slower & more expressive. "
-                "Set CFG to 0 for cross-language transfer."
-            )
-
-            exaggeration = gr.Slider(
-                0.25, 0.8, step=0.05,
-                label="Exaggeration (Emotion, 0.5 = neutral)",
-                value=0.25
-            )
-            cfg_weight = gr.Slider(
-                minimum=0.0, maximum=3.0, value=0.8, step=0.1,
-                label="CFG / Pace (Higher = stricter accent, but speaks faster)",
-            )
-
+            with gr.Row(elem_classes=["tag-container"]):
+                for tag in EVENT_TAGS:
+                    btn = gr.Button(tag, elem_classes=["tag-btn"])
+                    btn.click(fn=None, inputs=[btn, text], outputs=text, js=INSERT_TAG_JS)
+            
             with gr.Row():
-                enable_sanitizer = gr.Checkbox(label="Sanitize Numbers & Acronyms", value=True)
-                enable_chunking = gr.Checkbox(label="Smart Chunking (long text)", value=True)
+                enable_sanitizer = gr.Checkbox(label="Aggressive Sanitizer", value=True)
+                enable_chunking = gr.Checkbox(label="Smart Chunking", value=True)
+            
+            with gr.Row():
+                language_id = gr.Dropdown(choices=list(SUPPORTED_LANGUAGES.keys()), value="ne", label="Language")
+                ref_dropdown = gr.Dropdown(choices=[f.name for f in Path("samples").glob("*") if f.suffix in [".mp3", ".wav"]], value="Prakash.mp3", label="Reference Voice")
+            ref_wav = gr.Audio(label="OR Upload Custom Reference", type="filepath")
 
+        with gr.Column(scale=1):
+            model_selector = gr.Radio(choices=["base", "nepali-epoch-30", "nepali-epoch-40", "nepali-epoch-45", "nepali-final"], value="nepali-final", label="Checkpoint")
+            model_status = gr.Markdown(f"**Status:** `Active: nepali-final`")
+            
+            exaggeration = gr.Slider(0.0, 3.0, value=0.0, step=0.1, label="Exaggeration")
+            cfg_weight = gr.Slider(0.0, 3.0, value=0.8, step=0.1, label="CFG (Pace)")
+            
             with gr.Accordion("Advanced Options", open=False):
-                speed_slider = gr.Slider(0.5, 1.5, step=0.05, value=1.0, label="Audio Speed (Pace control)")
-                temp = gr.Slider(0.05, 5.0, step=0.05, label="Temperature", value=0.8)
-                seed_num = gr.Number(value=0, label="Random Seed (0 = random)")
+                speed_slider = gr.Slider(0.5, 1.5, step=0.05, value=1.0, label="Speed")
+                temp = gr.Slider(0.05, 2.0, step=0.05, label="Temperature", value=0.8)
+                top_p = gr.Slider(0.0, 1.0, step=0.05, label="Top P", value=1.0)
+                min_p = gr.Slider(0.0, 1.0, step=0.01, label="Min P", value=0.05)
+                repetition_penalty = gr.Slider(1.0, 5.0, step=0.1, label="Repetition Penalty", value=2.0)
+                seed_num = gr.Number(value=0, label="Seed")
 
-            run_btn = gr.Button("🎙️ Generate Speech", variant="primary", size="lg")
+            run_btn = gr.Button("Generate Speech", variant="primary")
+            audio_output = gr.Audio(label="Output Audio")
 
-        with gr.Column():
-            audio_output = gr.Audio(label="Generated Audio")
-
-    # --- Events ---
-    model_selector.change(
-        fn=switch_model,
-        inputs=[model_selector],
-        outputs=[model_status],
+    gr.Examples(
+        examples=[
+            ["नेपाल दक्षिण एसियामा अवस्थित एक भूपरिवेष्टित देश हो।", "ne", "Prakash.mp3"],
+            ["यसको जनसंख्या लगभग ३ करोड छ। [laugh]", "ne", "Prakash.mp3"],
+            ["WHO ले सन् २०२० मा COVID-19 लाई विश्वव्यापी महामारी घोषणा गर्यो।", "ne", "Prakash.mp3"],
+            ["सगरमाथाको उचाइ 8848.86m छ।", "ne", "Prakash.mp3"]
+        ],
+        inputs=[text, language_id, ref_dropdown]
     )
 
-    def on_language_change(lang):
-        return LANGUAGE_CONFIG.get(lang, {}).get("text", "")
+    def load_wrapper(): 
+        get_or_load_model()
+        return None
 
-    language_id.change(
-        fn=on_language_change,
-        inputs=[language_id],
-        outputs=[text],
-        show_progress=False
-    )
-
+    demo.load(fn=load_wrapper, outputs=None)
+    model_selector.change(fn=lambda m: (switch_model(m), f"**Status:** `Active: {m}`"), inputs=[model_selector], outputs=[model_status, model_status])
     run_btn.click(
         fn=generate_tts_audio,
-        inputs=[
-            text, language_id, ref_dropdown, ref_wav,
-            exaggeration, cfg_weight, temp,
-            seed_num, enable_sanitizer, enable_chunking, speed_slider
-        ],
-        outputs=[audio_output],
+        inputs=[text, language_id, ref_dropdown, ref_wav, exaggeration, cfg_weight, temp, seed_num, enable_sanitizer, enable_chunking, speed_slider, repetition_penalty, top_p, min_p],
+        outputs=[audio_output]
     )
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860, share=True)
+    demo.launch(server_name="0.0.0.0", share=True)

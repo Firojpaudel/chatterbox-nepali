@@ -1,0 +1,18 @@
+import sys
+from chatterbox.utils.sanitizer import sanitize_text
+
+test_text = (
+    "नेपाल दक्षिण एसियामा अवस्थित एक भूपरिवेष्टित देश हो।\n"
+    "यसको जनसंख्या लगभग ३ करोड छ।\n\n"
+    "WHO ले सन् २०२० मा COVID-19 लाई विश्वव्यापी महामारी घोषणा गर्यो।\n"
+    "नेपालमा पनि यसको प्रभाव परेको थियो। NGO हरूले राहत वितरणमा महत्त्वपूर्ण भूमिका खेले।\n\n"
+    "सगरमाथाको उचाइ 8848.86m छ। GDP मा वार्षिक 6.5% वृद्धि अपेक्षित छ।\n"
+    "NEA ले देशभर विद्युत विस्तारमा रु 50,00,00,000 लगानी गर्ने योजना बनाएको छ।\n\n"
+    "काठमाडौंको तापक्रम 10:30 AM मा 18.5 डिग्री सेल्सियस थियो।\n"
+    "दैनिक 9841-456132 नम्बरमा सम्पर्क गर्न सकिन्छ।"
+)
+
+sanitized = sanitize_text(test_text, lang="ne")
+
+# Use sys.stdout.buffer.write to handle utf-8 in windows terminal
+sys.stdout.buffer.write(sanitized.encode('utf-8'))
