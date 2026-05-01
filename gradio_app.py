@@ -24,7 +24,7 @@ from chatterbox.mtl_tts import ChatterboxMultilingualTTS, SUPPORTED_LANGUAGES
 from chatterbox.utils.sanitizer import sanitize_text
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"🚀 Running on device: {DEVICE}")
+print(f"Running on device: {DEVICE}")
 
 # --- Global State ---
 MODEL = None
@@ -72,9 +72,9 @@ def get_or_load_model():
             path = hf_hub_download(repo_id=REPO_ID, filename=filename)
             raw = torch.load(path, map_location='cpu', weights_only=True)
             FINETUNE_STATES[name] = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in raw.items()}
-            print(f"✅ {name} weights cached.")
+            print(f"DONE: {name} weights cached.")
         except Exception as e:
-            print(f"⚠️ Could not load {name}: {e}")
+            print(f"ERROR: Could not load {name}: {e}")
 
     CURRENT_MODEL_TYPE = "base"
     print(f"Model ready on {MODEL.device} | Active: base")
@@ -220,7 +220,7 @@ def generate_tts_audio(
         final_wav = librosa.effects.time_stretch(final_wav, rate=speed_input)
 
     elapsed = time.time() - start
-    print(f"✅ Done in {elapsed:.1f}s | {len(chunks)} chunk(s)")
+    print(f"DONE in {elapsed:.1f}s | {len(chunks)} chunk(s)")
     return (model.sr, final_wav)
 
 
