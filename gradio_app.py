@@ -60,9 +60,10 @@ def get_or_load_model():
     # Cache Nepali fine-tuned weights
     REPO_ID = "Firoj112/chatterbox-nepali-runs"
     CHECKPOINTS = {
-        "nepali-epoch-30": "t3_nepali_epoch_30.pt",
-        "nepali-epoch-40": "t3_nepali_epoch_40.pt",
+        "nepali-final": "t3_mtl_nepali_final.safetensors",
         "nepali-epoch-45": "t3_nepali_epoch_45.pt",
+        "nepali-epoch-40": "t3_nepali_epoch_40.pt",
+        "nepali-epoch-30": "t3_nepali_epoch_30.pt",
     }
 
     for name, filename in CHECKPOINTS.items():
@@ -70,14 +71,33 @@ def get_or_load_model():
             # This will use cached file if available, or download if missing
             print(f"Loading weights for {name} ({filename})...")
             path = hf_hub_download(repo_id=REPO_ID, filename=filename)
-            raw = torch.load(path, map_location='cpu', weights_only=True)
-            FINETUNE_STATES[name] = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in raw.items()}
+            if filename.endswith(".safetensors"):
+                from safetensors.torch import load_file as load_safetensors
+                raw = load_safetensors(path)
+            else:
+                raw = torch.load(path, map_location='cpu', weights_only=True)
+            
+            # Remove "patched_model." or "model." prefix if present
+            state_dict = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in raw.items()}
+            FINETUNE_STATES[name] = state_dict
             print(f"DONE: {name} weights cached.")
         except Exception as e:
             print(f"ERROR: Could not load {name}: {e}")
 
-    CURRENT_MODEL_TYPE = "base"
-    print(f"Model ready on {MODEL.device} | Active: base")
+    # Set default model: prefer nepali-final, then epoch-45, then base
+    if "nepali-final" in FINETUNE_STATES:
+        CURRENT_MODEL_TYPE = "nepali-final"
+        MODEL.t3.load_state_dict(FINETUNE_STATES["nepali-final"], strict=False)
+        print("Active: nepali-final")
+    elif "nepali-epoch-45" in FINETUNE_STATES:
+        CURRENT_MODEL_TYPE = "nepali-epoch-45"
+        MODEL.t3.load_state_dict(FINETUNE_STATES["nepali-epoch-45"], strict=False)
+        print("Active: nepali-epoch-45")
+    else:
+        CURRENT_MODEL_TYPE = "base"
+        print("Active: base")
+
+    print(f"Model ready on {MODEL.device}")
     return MODEL
 
 
@@ -229,7 +249,7 @@ def generate_tts_audio(
 with gr.Blocks() as demo:
     gr.Markdown(
         """
-        # 🇳🇵 Chatterbox Nepali TTS
+        # Nepali Chatterbox TTS
         Fine-tuned Chatterbox Multilingual v2 for Nepali — with sanitization & smart chunking.
 
         Based on [ResembleAI/Chatterbox](https://github.com/resemble-ai/chatterbox) | MIT License
@@ -246,11 +266,11 @@ with gr.Blocks() as demo:
             model_selector = gr.Radio(
                 choices=choices,
                 value=CURRENT_MODEL_TYPE,
-                label="🧠 Model",
+                label="Model",
                 info="Select model checkpoint: base (multilingual) or fine-tuned Nepali epochs"
             )
             model_status = gr.Textbox(
-                value="✅ Active: Base (Multilingual v2)",
+                value=f"Active: {CURRENT_MODEL_TYPE}",
                 label="Model Status",
                 interactive=False
             )
@@ -282,7 +302,7 @@ with gr.Blocks() as demo:
             ref_dropdown = gr.Dropdown(
                 choices=available_refs,
                 value=default_ref,
-                label="🎤 Reference Voice",
+                label="Reference Voice",
                 info="Select from available audio files"
             )
 
