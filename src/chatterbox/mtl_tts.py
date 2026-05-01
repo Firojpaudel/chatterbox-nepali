@@ -270,6 +270,7 @@ class ChatterboxMultilingualTTS:
         repetition_penalty=2.0,
         min_p=0.05,
         top_p=1.0,
+        max_new_tokens=1000,
     ):
         # Validate language_id
         if language_id and language_id.lower() not in SUPPORTED_LANGUAGES:
@@ -307,7 +308,7 @@ class ChatterboxMultilingualTTS:
             speech_tokens = self.t3.inference(
                 t3_cond=self.conds.t3,
                 text_tokens=text_tokens,
-                max_new_tokens=1000,  # TODO: use the value in config
+                max_new_tokens=max_new_tokens,
                 temperature=temperature,
                 cfg_weight=cfg_weight,
                 repetition_penalty=repetition_penalty,
@@ -319,6 +320,12 @@ class ChatterboxMultilingualTTS:
 
             # TODO: output becomes 1D
             speech_tokens = drop_invalid_tokens(speech_tokens)
+            
+            if speech_tokens.numel() == 0:
+                print("Warning: Model generated zero valid tokens for this chunk. Skipping.")
+                # Return a tiny bit of silence instead of crashing
+                return torch.zeros((1, 1, 1024))
+                
             speech_tokens = speech_tokens.to(self.device)
 
             wav, _ = self.s3gen.inference(

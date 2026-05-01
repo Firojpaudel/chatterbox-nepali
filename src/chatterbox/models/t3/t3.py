@@ -443,6 +443,19 @@ class T3(nn.Module):
 
         # Concatenate all predicted tokens along the sequence dimension.
         predicted_tokens = torch.cat(predicted, dim=1)  # shape: (B, num_tokens)
+        
+        # Smart Trimming:
+        # The fine-tuned model sometimes "forgets" to stop and generates gibberish.
+        # The alignment analyzer knows EXACTLY when the text finished. We trim there + a generous buffer.
+        if (self.patched_model.alignment_stream_analyzer is not None
+                and self.patched_model.alignment_stream_analyzer.completed_at is not None):
+            trim_to = self.patched_model.alignment_stream_analyzer.completed_at
+            # Add an 8-token buffer (~300ms) to ensure the final word's reverb/breath isn't cut off
+            trim_to = min(trim_to + 8, predicted_tokens.shape[1])
+            if trim_to < predicted_tokens.shape[1]:
+                print(f"✂️ Trimming {predicted_tokens.shape[1] - trim_to} hallucinated tokens from the end.")
+                predicted_tokens = predicted_tokens[:, :trim_to]
+        
         return predicted_tokens
 
     @torch.inference_mode()
