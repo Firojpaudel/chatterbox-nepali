@@ -24,10 +24,21 @@ This repository is a fork of the official [Chatterbox](https://github.com/resemb
 | Feature | Upstream (`resemble-ai/chatterbox`) | This Fork |
 | :--- | :--- | :--- |
 | Languages | 23 languages | 23 + **Nepali (`ne`)** |
-| Nepali weights | Not included | Fine-tuned for 50 epochs |
-| Hallucination fix | Standard EOS | `AlignmentStreamAnalyzer` for Devanagari |
+| Nepali weights | Not included | Fine-tuned for high-fidelity native speech |
+| Hallucination fix | Standard EOS | `AlignmentStreamAnalyzer` + Out-of-bounds token filtering |
 | Gradio app | Standard | Nepali-focused UI (`gradio_app.py`) |
-| Text sanitization | English-only | Nepali number/symbol expansion |
+| Text sanitization | English-only | Language-aware (Nepali & English support) |
+
+---
+
+## Key Features & Stability
+
+This fork introduces several critical improvements over the base repository to ensure production stability:
+
+1. **Nepali-Centric Sanitization**: A custom normalization layer that correctly expands Nepali numbers, dates, and currency while handling Devanagari punctuation.
+2. **Language-Aware Processing**: The sanitizer now intelligently switches between Nepali and English rules—preserving apostrophes and hyphens in English while applying aggressive normalization to Nepali to prevent hallucinations.
+3. **Inference Stability (CUDA Fix)**: Implemented a robust token-filtering layer that strips "out-of-bounds" hallucinations. This prevents the `device-side assert` crashes common when models generate unexpected high-index tokens.
+4. **Hallucination Prevention**: Integrated `AlignmentStreamAnalyzer` to force termination of speech when the model enters an infinite repetition loop, a common issue in Devanagari synthesis.
 
 ---
 

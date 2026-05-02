@@ -103,8 +103,10 @@ def sanitize_numbers(num_str, lang="ne"):
         return num_str
 
 def sanitize_text(text, lang="ne"):
-    # 1. Immediate whitespace cleanup (CRITICAL: prevents \n being read as 'n')
+    # 1. Immediate whitespace cleanup
     text = text.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+    # Normalize curly quotes/apostrophes early
+    text = text.replace('‘', "'").replace('’', "'").replace('“', '"').replace('”', '"')
     
     # 2. Markdown removal
     text = re.sub(r'[*_]{1,3}', '', text)
@@ -124,8 +126,13 @@ def sanitize_text(text, lang="ne"):
         text = re.sub(pattern, lambda m: f"{sanitize_numbers(m.group(1), lang)} {word}", text)
 
     # 4. Symbols
-    text = re.sub(r'([0-9०-९,.]+)\s?%', lambda m: f"{sanitize_numbers(m.group(1), lang)} प्रतिशत", text)
-    symbol_map = {'&': 'र', '@': 'एट', '#': 'ह्यास', '$': 'डलर', '/': 'स्ल्याश'}
+    if lang == "ne":
+        text = re.sub(r'([0-9०-९,.]+)\s?%', lambda m: f"{sanitize_numbers(m.group(1), lang)} प्रतिशत", text)
+        symbol_map = {'&': 'र', '@': 'एट', '#': 'ह्यास', '$': 'डलर', '/': 'स्ल्याश'}
+    else:
+        text = re.sub(r'([0-9०-९,.]+)\s?%', lambda m: f"{sanitize_numbers(m.group(1), lang)} percent", text)
+        symbol_map = {'&': 'and', '@': 'at', '#': 'hash', '$': 'dollars', '/': 'slash'}
+        
     for sym, word in symbol_map.items():
         text = text.replace(sym, f" {word} ")
 
@@ -135,55 +142,65 @@ def sanitize_text(text, lang="ne"):
         h, m, suffix = match.group(1), match.group(2), (match.group(3) or "").upper()
         h_word, m_word = sanitize_numbers(h, lang), sanitize_numbers(m, lang)
         if suffix:
-            suffix_word = " ".join([ACRONYM_MAP_EN.get(c, c) for c in suffix])
+            suffix_word = suffix if lang == "en" else " ".join([ACRONYM_MAP_NE.get(c, c) for c in suffix])
             return f"{h_word} {m_word} {suffix_word}"
         return f"{h_word} {m_word}"
     text = re.sub(time_regex, replace_time, text)
 
-    # 6. Phone Numbers (Pairs)
-    # Flexible regex to catch Nepali mobile/landline with optional hyphens/spaces
-    phone_regex = r'\b((?:98|97|96)[0-9०-९\s-]{8,11}|0[1-9][0-9०-९\s-]{6,10})\b'
-    def replace_phone(match):
-        raw = match.group(0)
-        # Only treat as phone if it has a reasonable number of digits (8-10)
-        digits = raw.translate(DIGIT_MAP).replace("-", "").replace(" ", "")
-        if not (7 <= len(digits) <= 11): return raw
-        
-        res, i = [], 0
-        while i < len(digits):
-            if i + 1 < len(digits):
-                pair_str = digits[i:i+2]
-                if pair_str[0] == "0":
-                    res.append(f"शून्य {NEPALI_NUMS[int(pair_str[1])]}")
+    # 6. Phone Numbers (Pairs - only for Nepali)
+    if lang == "ne":
+        phone_regex = r'\b((?:98|97|96)[0-9०-९\s-]{8,11}|0[1-9][0-9०-९\s-]{6,10})\b'
+        def replace_phone(match):
+            raw = match.group(0)
+            digits = raw.translate(DIGIT_MAP).replace("-", "").replace(" ", "")
+            if not (7 <= len(digits) <= 11): return raw
+            res, i = [], 0
+            while i < len(digits):
+                if i + 1 < len(digits):
+                    pair_str = digits[i:i+2]
+                    if pair_str[0] == "0":
+                        res.append(f"शून्य {NEPALI_NUMS[int(pair_str[1])]}")
+                    else:
+                        res.append(number_to_nepali(int(pair_str)))
+                    i += 2
                 else:
-                    res.append(number_to_nepali(int(pair_str)))
-                i += 2
-            else:
-                res.append(NEPALI_NUMS[int(digits[i])]); i += 1
-        return " " + " ".join(res) + " "
-    text = re.sub(phone_regex, replace_phone, text)
+                    res.append(NEPALI_NUMS[int(digits[i])]); i += 1
+            return " " + " ".join(res) + " "
+        text = re.sub(phone_regex, replace_phone, text)
 
     # 7. Unified Currencies
     currency_regex = r'(Rs\.?|रू\.?|रु\.?)?\s?([0-9०-९,]+(?:\.[0-9०-९,]+)?)\s?(रुपैयाँ|rupees)?'
     def replace_currency(match):
         if not match.group(1) and not match.group(3): return match.group(0)
-        return f" {sanitize_numbers(match.group(2), lang)} रुपैयाँ "
+        word = "रुपैयाँ" if lang == "ne" else "rupees"
+        return f" {sanitize_numbers(match.group(2), lang)} {word} "
     text = re.sub(currency_regex, replace_currency, text)
 
     # 8. Remaining Numbers
     text = re.sub(r'\b[0-9०-९,]+(?:\.[0-9०-९,]+)?\b', lambda m: sanitize_numbers(m.group(0), lang), text)
 
-    # 9. Acronyms (Capitalize single letters first, then map)
-    text = re.sub(r'\b([a-z])\b', lambda m: m.group(1).upper(), text)
-    def replace_acronym(match):
-        acro, suff = match.group(1), match.group(2) or ""
-        if lang == "en" and acro == "A" and not suff: return match.group(0)
-        mapped = " ".join([ACRONYM_MAP_NE.get(c, c) for c in acro])
-        return f"{mapped}{suff}"
-    text = re.sub(r'\b([A-Z]{1,})([अ-ञा-्]*)\b', replace_acronym, text)
+    # 9. Acronyms
+    if lang == "ne":
+        # For Nepali, expand capital letters to Devanagari phonetics
+        text = re.sub(r'\b([a-z])\b', lambda m: m.group(1).upper(), text)
+        def replace_acronym_ne(match):
+            acro, suff = match.group(1), match.group(2) or ""
+            mapped = " ".join([ACRONYM_MAP_NE.get(c, c) for c in acro])
+            return f"{mapped}{suff}"
+        text = re.sub(r'\b([A-Z]{1,})([अ-ञा-्]*)\b', replace_acronym_ne, text)
+    else:
+        # For English, preserve most acronyms as-is, maybe expand some
+        # But specifically don't map "S" to "एस"
+        pass
 
-    # 10. FINAL SAFETY CLEANUP (Full Devanagari range \u0900-\u097F)
-    text = re.sub(r'[^a-zA-Z0-9\u0900-\u097F\s।\.?!]', ' ', text)
+    # 10. FINAL SAFETY CLEANUP
+    if lang == "ne":
+        # Aggressive cleanup for Nepali to prevent halluncinations from punctuation
+        text = re.sub(r'[^a-zA-Z0-9\u0900-\u097F\s।\.?!]', ' ', text)
+    else:
+        # Lighter cleanup for English - preserve apostrophes, hyphens, and commas
+        text = re.sub(r'[^a-zA-Z0-9\s\.\,\!\?\-\'\"]', ' ', text)
+        
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 

@@ -340,9 +340,15 @@ class S3Token2Wav(S3Token2Mel):
         n_cfm_timesteps=None,
         speech_token_lens=None,
     ):
-        # hallucination prevention, drop special tokens
-        # if drop_invalid_tokens:
-        #     speech_tokens, speech_token_lens = drop_invalid(speech_tokens, pad=S3_QUIET_PAD)
+        # Token range safety check (hallucination prevention)
+        from ..s3tokenizer import drop_invalid_tokens
+        speech_tokens = drop_invalid_tokens(speech_tokens)
+        if speech_token_lens is not None:
+             speech_token_lens = torch.LongTensor([speech_tokens.size(-1)]).to(speech_tokens.device)
+        
+        if speech_tokens.numel() == 0:
+            logging.warning("S3Gen received zero valid tokens after filtering. Returning silence.")
+            return torch.zeros((1, 1, 1024), device=speech_tokens.device), None
 
         output_mels = self.flow_inference(
             speech_tokens,
