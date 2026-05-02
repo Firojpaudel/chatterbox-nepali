@@ -84,8 +84,8 @@ INSERT_TAG_JS = """
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 model = None
 BASE_T3_STATE = None
-FINETUNE_STATES = {}
-CURRENT_MODEL_TYPE = "nepali-final"  # Default to fine-tuned model
+# We no longer pre-load states to save RAM
+CURRENT_MODEL_TYPE = "nepali-final"
 
 def set_seed(seed: int):
     torch.manual_seed(seed)
@@ -102,61 +102,91 @@ SUPPORTED_LANGUAGES = {
     "pa": "Punjabi", "ta": "Tamil", "te": "Telugu"
 }
 
+import gc
+import copy
+
+# We only store the filenames, not the actual weights, to save RAM
+FINETUNE_FILES = {}
+
 def get_or_load_model():
-    global model, BASE_T3_STATE, FINETUNE_STATES, CURRENT_MODEL_TYPE
+    global model, BASE_T3_STATE, CURRENT_MODEL_TYPE, FINETUNE_FILES
     if model is not None: return model
 
     print("Loading Chatterbox Multilingual v2 base model...")
     model = ChatterboxMultilingualTTS.from_pretrained(DEVICE)
     model.t3.eval()
+    
+    # Save a copy of the base T3 state for switching back
+    print("Caching base T3 state...")
     BASE_T3_STATE = {k: v.cpu().clone() for k, v in model.t3.state_dict().items()}
-
+    
+    # Identify available checkpoints but DON'T load them yet
     for name, filename in CHECKPOINTS.items():
-        try:
-            if not os.path.exists(filename):
+        if not os.path.exists(filename):
+            try:
                 hf_hub_download(repo_id=REPO_ID, filename=filename, local_dir=".")
-            if filename.endswith(".safetensors"):
-                state = load_safetensors(filename)
-            else:
-                state = torch.load(filename, map_location="cpu", weights_only=True)
-            clean_state = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in state.items()}
-            FINETUNE_STATES[name] = clean_state
-        except Exception as e:
-            print(f"Skipping {name}: {e}")
+            except Exception as e:
+                print(f"Could not download {filename}: {e}")
+                continue
+        
+        if os.path.exists(filename):
+            FINETUNE_FILES[name] = filename
+            print(f"Registered checkpoint: {name} ({filename})")
 
-    if "nepali-final" in FINETUNE_STATES:
-        model.t3.load_state_dict(FINETUNE_STATES["nepali-final"], strict=False)
-        CURRENT_MODEL_TYPE = "nepali-final"
-    elif "nepali-merged" in FINETUNE_STATES: 
-        model.t3.load_state_dict(FINETUNE_STATES["nepali-merged"], strict=False)
-        CURRENT_MODEL_TYPE = "nepali-merged"
+    # Load the default model (nepali-final) on demand
+    if "nepali-final" in FINETUNE_FILES:
+        print("Loading default Nepali model (nepali-final)...")
+        switch_model("nepali-final")
+    
     return model
 
 def switch_model(model_type):
-    global CURRENT_MODEL_TYPE, model, BASE_T3_STATE
+    global CURRENT_MODEL_TYPE, model, BASE_T3_STATE, FINETUNE_FILES
     if model is None: 
         print("Error: Model not loaded yet!")
         return "Model not loaded"
     
+    # Clear cache before starting
+    torch.cuda.empty_cache()
+    gc.collect()
+
     try:
-        if model_type in FINETUNE_STATES:
-            print(f"--- Switching to fine-tuned model: {model_type} ---")
-            model.t3.load_state_dict(FINETUNE_STATES[model_type], strict=False)
+        if model_type in FINETUNE_FILES:
+            filename = FINETUNE_FILES[model_type]
+            print(f"--- Loading weights for: {model_type} ({filename}) ---")
+            
+            if filename.endswith(".safetensors"):
+                from safetensors.torch import load_file
+                state = load_file(filename, device="cpu")
+            else:
+                state = torch.load(filename, map_location="cpu", weights_only=True)
+            
+            clean_state = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in state.items()}
+            
+            model.t3.load_state_dict(clean_state, strict=False)
             model.t3.to(DEVICE).eval()
             model.t3.compiled = False
+            
+            # Immediately delete state to free RAM
+            del state
+            del clean_state
+            gc.collect()
+            
             CURRENT_MODEL_TYPE = model_type
             print(f"Successfully loaded {model_type}")
             return f"Active: {model_type}"
+            
         elif model_type == "base":
             print("--- Switching to Base Multilingual model ---")
             if BASE_T3_STATE is None:
-                print("Error: BASE_T3_STATE is missing!")
                 return "Base state missing"
+            
             model.t3.load_state_dict(BASE_T3_STATE, strict=True)
             model.t3.to(DEVICE).eval()
             model.t3.compiled = False
+            
+            gc.collect()
             CURRENT_MODEL_TYPE = "base"
-            print("Successfully loaded Base model")
             return "Active: Base"
         else:
             print(f"Error: Unknown model type {model_type}")
