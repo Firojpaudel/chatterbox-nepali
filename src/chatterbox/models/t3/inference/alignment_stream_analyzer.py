@@ -168,7 +168,7 @@ class AlignmentStreamAnalyzer:
         
         if token_repetition:
             repeated_token = self.generated_tokens[-1]
-            print(f"⚠️  [AlignmentStreamAnalyzer] Detected abnormal 15x repetition of acoustic token {repeated_token}")
+            logger.warning(f"Detected abnormal 15x repetition of acoustic token {repeated_token}")
             
         # Suppress EoS to prevent early termination
         # Fix: Devanagari argmax attention can lag far behind text position. 
@@ -179,7 +179,7 @@ class AlignmentStreamAnalyzer:
         # If a bad ending is detected, force emit EOS by modifying logits
         # NOTE: this means logits may be inconsistent with latents!
         if long_tail or alignment_repetition or token_repetition:
-            print(f"🛑 [AlignmentStreamAnalyzer] FORCING EOS token. Reason: {long_tail=}, {alignment_repetition=}, {token_repetition=}")
+            logger.warning(f"forcing EOS token, {long_tail=}, {alignment_repetition=}, {token_repetition=}")
             # (±2**15 is safe for all dtypes >= 16bit)
             logits = -(2**15) * torch.ones_like(logits)
             logits[..., self.eos_idx] = 2**15
