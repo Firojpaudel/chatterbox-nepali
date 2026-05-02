@@ -252,8 +252,8 @@ def generate_tts_audio(
 
 # ===================== GRADIO UI =====================
 
-with gr.Blocks(title="WiseYak Nepali TTS", css=CUSTOM_CSS) as demo:
-    gr.Markdown("# 🎙️ WiseYak Nepali TTS\nState-of-the-Art Nepali Speech Synthesis")
+with gr.Blocks(title="Chatterbox Nepali TTS", css=CUSTOM_CSS) as demo:
+    gr.Markdown("# 🎙️ Chatterbox Nepali TTS\nState-of-the-Art Nepali Speech Synthesis")
 
     with gr.Row():
         with gr.Column(scale=2):
