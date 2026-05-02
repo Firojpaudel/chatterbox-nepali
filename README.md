@@ -1,154 +1,213 @@
-# 🇳🇵 Chatterbox-TTS (Nepali Edition)
+<p align="center">
+  <img src="Chatterbox-Multilingual.png" width="800px" alt="Chatterbox Multilingual"/>
+</p>
 
-Fine-tuned text-to-speech for the Nepali language, based on the **Chatterbox-Multilingual-500M** architecture. This repository contains the custom training logic, bug fixes for the Devanagari script, and tools for high-fidelity Nepali voice cloning.
+# Chatterbox — Nepali Fine-tune
 
-![Nepali TTS Preview](./Chatterbox-Multilingual.png)
+> **A community extension of [resemble-ai/chatterbox](https://github.com/resemble-ai/chatterbox) adding native Nepali (Devanagari) speech synthesis.**
 
-## 🚀 Key Features
-* **Full Devanagari Support**: Patched tokenizer and alignment analyzer to handle complex Nepali character clusters without cutting off.
-* **Seamless Voice Cloning**: High-quality zero-shot cloning of Nepali voices using a 5-10 second reference clip.
-* **Optimized for Mac**: Pre-configured for **Apple Silicon (MPS)** acceleration and memory-efficient training on M2/M3 chips.
-* **Clean Inference**: Dedicated Gradio UI and test scripts for rapid experimentation.
-
-## 📦 Model Checkpoints
-To ensure repository performance, large training checkpoints are hosted on Hugging Face:
-- **Repo Link**: [https://huggingface.co/officialuser/chatterbox-nepali](https://huggingface.co/officialuser/chatterbox-nepali)
-
-| File | Purpose | Recommendation |
-| :--- | :--- | :--- |
-| `t3_nepali_epoch_20.pt` | **Base Nepali Checkpoint** | Use for **quick testing** or as a starting point to **train further**. |
-
-> [!TIP]
-> While the provided checkpoint works for testing, we recommend training for **50 to 100 epochs** on your dedicated dataset to achieve significantly more natural-sounding voices and smoother Nepali prosody.
-
-*Place this file in the root folder of this repository after downloading.*
+[![Hugging Face - Weights](https://img.shields.io/badge/HuggingFace-Weights-yellow?logo=huggingface)](https://huggingface.co/Firoj112/chatterbox-nepali-runs)
+[![Base Model](https://img.shields.io/badge/Base-ResembleAI%2Fchatterbox-blue?logo=github)](https://github.com/resemble-ai/chatterbox)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ---
 
-## ⚙️ Installation
-Follow these steps to set up the environment and download the codebase:
+This repository is a fork of the official [Chatterbox](https://github.com/resemble-ai/chatterbox) TTS system by [Resemble AI](https://resemble.ai). It extends the multilingual model (`ChatterboxMultilingualTTS`) with Nepali language support through supervised fine-tuning on native Devanagari speech data.
+
+**All fine-tuned model weights are hosted on Hugging Face:**
+**[Firoj112/chatterbox-nepali-runs](https://huggingface.co/Firoj112/chatterbox-nepali-runs)**
+
+---
+
+## What's Different from Upstream
+
+| Feature | Upstream (`resemble-ai/chatterbox`) | This Fork |
+| :--- | :--- | :--- |
+| Languages | 23 languages | 23 + **Nepali (`ne`)** |
+| Nepali weights | Not included | Fine-tuned for 50 epochs |
+| Hallucination fix | Standard EOS | `AlignmentStreamAnalyzer` for Devanagari |
+| Gradio app | Standard | Nepali-focused UI (`gradio_app.py`) |
+| Text sanitization | English-only | Nepali number/symbol expansion |
+
+---
+
+## Quick Start
+
+### Installation
 
 ```bash
-# 1. Create and activate a dedicated conda environment
-conda create -n chatterbox_ne python=3.11 -y
-conda activate chatterbox_ne
-
-# 2. Clone the repository
-git clone https://github.com/officialuser/chatterbox-nepali.git
+# Clone this fork
+git clone https://github.com/Firojpaudel/chatterbox-nepali.git
 cd chatterbox-nepali
-
-# 3. Install dependencies in editable mode
 pip install -e .
 ```
 
----
+### Download Weights from Hugging Face
 
-## 🎙️ Inference & Implementation
+```python
+from huggingface_hub import hf_hub_download
 
-### 🛡️ Quick Testing
-To generate Nepali speech correctly, you **must** use the provided test scripts. Standard library imports from Hugging Face will not support Devanagari without these specific patches.
+# Download the merged model (recommended — best balance of Nepali + English)
+hf_hub_download(
+    repo_id="Firoj112/chatterbox-nepali-runs",
+    filename="t3_mtl_nepali_merged.safetensors",
+    local_dir="."
+)
+```
 
-#### 🎧 Hear the Results
-**[Listen to the Nepali Rainbow Benchmark Output](./nepali_test_output.wav)**
+### Generate Nepali Speech
 
-#### Benchmark (M2 Max 64GB)
-- **Input**: Long paragraph (~45 words)
-- **Reference Audio**: 10 seconds (samples/achyut_ref_10s.wav)
-- **Generation Time (MPS)**: **~115 seconds**
-- **Real-time Factor**: ~0.35x
+```python
+import torch
+import torchaudio as ta
+from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+from safetensors.torch import load_file
 
-#### Run the test command:
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# Load base model structure
+model = ChatterboxMultilingualTTS.from_pretrained(device)
+
+# Load Nepali-tuned weights
+state_dict = load_file("t3_mtl_nepali_merged.safetensors")
+clean_state = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in state_dict.items()}
+model.t3.load_state_dict(clean_state, strict=False)
+model.t3.eval()
+
+# Synthesize
+wav = model.generate(
+    "नमस्ते, म नेपालीमा पनि राम्रोसँग बोल्न सक्छु।",
+    language_id="ne",
+    audio_prompt_path="samples/Prakash.mp3",  # reference voice
+    cfg_weight=0.5,
+    temperature=0.8,
+)
+ta.save("output.wav", wav, model.sr)
+```
+
+### Run the Gradio App
+
 ```bash
-# Make sure your environment is active
-conda activate chatterbox_ne
-export PYTHONPATH=src
+# Full-featured Nepali TTS app (recommended)
+python gradio_app.py
 
-python3 test_nepali.py \
-  --checkpoint "t3_nepali_epoch_20.pt" \
-  --ref_audio "samples/achyut_ref_10s.wav" \
-  --text "इन्द्रेणी वा इन्द्रधनुष प्रकाश र रंगबाट उत्पन्न भएको यस्तो घटना हो जसमा रंगीन प्रकाशको एउटा अर्धवृत आकाशमा देखिन्छ। जब सूर्यको प्रकाश पृथ्वीको वायुमण्डलमा भएको पानीको थोपा माथि पर्छ, पानीको थोपाले प्रकाशलाई परावर्तन, आवर्तन र डिस्पर्सन गर्दछ।" \
-  --output "nepali_test_output.wav"
-```
-
-> [!NOTE]
-> The file **`nepali_test_output.wav`** in the root of this repository was generated using the command above. For testing emotional expressiveness and paralinguistic control, we recommend using the **Gradio Interface**. Note: The current Gradio script is optimized for the final `.safetensors` model; you can modify `gradio_nepali.py` if you wish to host a raw `.pt` checkpoint instead.
-
-### 🏮 Web UI (Gradio)
-Launch a graphical interface to test voices instantly. It will automatically detect and load your local Nepali weights:
-```bash
-conda activate chatterbox_ne
-export PYTHONPATH=src
-python3 gradio_nepali.py
-```
-
----
-
-## 🏋️ Training / Dataset Format
-If you wish to fine-tune the model further or use your own voice data, ensure your dataset follows the standard format:
-
-### 1. File Structure
-```text
-data/nepali/
-├── metadata.csv
-└── wavs/
-    ├── voice_01.wav
-    ├── voice_02.wav
-    └── ...
-```
-
-### 2. `metadata.csv` (Pipe-separated)
-The file should **not** have a header. Use the `filename|[ne]text` format:
-```csv
-voice_01|[ne]नमस्ते संसार यो मेरो आवाज हो
-voice_02|[ne]नेपाली भाषा धेरै मीठो छ
-```
-
-### 3. Audio Requirements
-*   **Format**: Mono WAV (24,000 Hz or 48,000 Hz recommended).
-*   **Duration**: 2 to 10 seconds per clip.
-
-### 4. Resume Training
-```bash
-conda activate chatterbox_ne
-export PYTHONPATH=src
-
-python3 src/chatterbox/train_nepali.py \
-  --manifest data/nepali/metadata.csv \
-  --device mps \
-  --batch_size 4 \
-  --accum_steps 4 \
-  --epochs 50 \
-  --save_every 5 \
-  --resume_t3_weights "t3_nepali_epoch_20.pt"
+# Or use the upstream multilingual app (now with Nepali support)
+python multilingual_app.py
 ```
 
 ---
 
-## 🎯 Post-Training (Safetensors Generation)
-Once your training reaches the final epoch (e.g. 50), the script will automatically consolidate your efforts and generate a high-performance **`t3_mtl_nepali_final.safetensors`** file.
+## Available Model Checkpoints
 
-### Using your Optimized Safetensors:
-Loading the finished `.safetensors` format is significantly **faster** and more secure than resuming from `.pt` checkpoints. You can use it in production with the following logic:
+All weights are on [Hugging Face](https://huggingface.co/Firoj112/chatterbox-nepali-runs):
 
-```bash
-# Use the same test script but point to your final safetensors
-python3 test_nepali.py \
-  --checkpoint "t3_mtl_nepali_final.safetensors" \
-  --ref_audio "your_reference.wav" \
-  --text "तपाईंको नयाँ नेपाली एआई तयार छ।" \
-  --output "production_output.wav"
+| File | Recommendation | Description |
+| :--- | :--- | :--- |
+| `t3_mtl_nepali_merged.safetensors` | **Best for most use cases** | 70% fine-tuned + 30% base (balanced) |
+| `t3_mtl_nepali_final.safetensors` | Best Nepali quality | Pure 50-epoch fine-tune (English degraded) |
+| `t3_nepali_epoch_45.pt` | Research | Epoch 45 checkpoint |
+| `t3_nepali_epoch_40.pt` | Research | Epoch 40 checkpoint |
+| `t3_nepali_epoch_30.pt` | Research | Epoch 30 checkpoint |
+
+### Why Two Final Models?
+
+Fine-tuning for 50 epochs on Nepali data caused **Catastrophic Forgetting** — the model's English prosody degraded significantly. To fix this without retraining, we applied linear weight interpolation:
+
+```
+W_merged = 0.7 × W_fine_tuned + 0.3 × W_base
+```
+
+This restores English clarity while preserving 50 epochs of Nepali learning. Full details and math in the [Hugging Face model card](https://huggingface.co/Firoj112/chatterbox-nepali-runs).
+
+---
+
+## Training Details
+
+- **Dataset**: [Firoj112/voxcpm-nepali-data](https://huggingface.co/datasets/Firoj112/voxcpm-nepali-data) (~8,000 clips)
+- **Hardware**: 2x NVIDIA T4 (Kaggle, 30GB VRAM total)
+- **Training strategy**: DDP + FP16 + Gradient Checkpointing
+- **Epochs**: 50 total (loss: 6.7 → 0.11)
+- **Language bootstrap**: `[ne]` tag initialized from `[hi]` weights for phonetic head-start
+
+See the [Hugging Face model card](https://huggingface.co/Firoj112/chatterbox-nepali-runs) for full training details, architecture breakdown, and the merging mathematics.
+
+---
+
+## Nepali-Specific Features
+
+### Text Sanitizer (`src/chatterbox/utils/sanitizer.py`)
+
+Normalizes Nepali text before synthesis:
+- Converts Devanagari numerals (१, २, ३...) to spoken form
+- Expands abbreviations and units (km → किलोमिटर)
+- Removes symbols that cause hallucinations
+
+```python
+from chatterbox.utils.sanitizer import sanitize_text
+text = sanitize_text("नेपालको क्षेत्रफल १,४७,१८१ km² छ।", lang="ne")
+```
+
+### AlignmentStreamAnalyzer
+
+Monitors cross-attention maps during inference to detect when the model has finished speaking all input text, then forcefully terminates generation. This prevents the long-tail gibberish that occurs with Devanagari inputs (where conjunct characters cause alignment drift).
+
+### Smart Chunking
+
+Long Nepali texts are split at sentence boundaries (`।`, `.`, `?`, `!`) before generation, then concatenated. This significantly improves quality for paragraphs.
+
+---
+
+## Original Chatterbox Tips
+
+> These tips from the upstream repo apply to Nepali synthesis as well.
+
+- **Reference audio**: Use a native Nepali speaker clip for best results. A Hindi reference will produce a Hindi-accented Nepali voice.
+- **CFG weight**: Set `cfg_weight=0` for neutral prosody when using a cross-language reference.
+- **Default settings**: `exaggeration=0.5, cfg_weight=0.5` work well for most inputs.
+- **Fast reference speakers**: Lower `cfg_weight` to ~0.3 to prevent rushed speech.
+
+---
+
+## Supported Languages
+
+This fork supports all 23 upstream languages plus Nepali:
+
+`ar` Arabic • `da` Danish • `de` German • `el` Greek • `en` English • `es` Spanish • `fi` Finnish • `fr` French • `he` Hebrew • `hi` Hindi • `it` Italian • `ja` Japanese • `ko` Korean • `ms` Malay • `ne` **Nepali** • `nl` Dutch • `no` Norwegian • `pl` Polish • `pt` Portuguese • `ru` Russian • `sv` Swedish • `sw` Swahili • `tr` Turkish • `zh` Chinese
+
+---
+
+## Acknowledgements
+
+- **[Resemble AI](https://resemble.ai)** — for the open-source Chatterbox model and inference engine
+- **[CosyVoice](https://github.com/FunAudioLLM/CosyVoice)**, **[S3Tokenizer](https://github.com/xingchensong/S3Tokenizer)** — upstream dependencies
+- **Wortsman et al., 2022** — Model Soups (linear weight interpolation for merging)
+
+---
+
+## Citation
+
+If you use this work, please cite both the base model and this fine-tune:
+
+```bibtex
+@misc{chatterboxtts2025,
+  author       = {{Resemble AI}},
+  title        = {{Chatterbox-TTS}},
+  year         = {2025},
+  howpublished = {\url{https://github.com/resemble-ai/chatterbox}},
+  note         = {GitHub repository}
+}
+
+@misc{chatterboxnepali2025,
+  author       = {Firoj Paudel},
+  title        = {{Chatterbox Nepali TTS Fine-tune}},
+  year         = {2025},
+  howpublished = {\url{https://github.com/Firojpaudel/chatterbox-nepali}},
+  note         = {Community fine-tune for Nepali language support}
+}
 ```
 
 ---
 
-## 🛠️ Critical Bug Fixes (Patched in this Fork)
-This fork includes essential fixes for Devanagari that are **not available** in the original repository:
-* **Causal Shift Fix**: Fixed the next-token prediction loss in `t3.py`.
-* **Tokenizer Logic**: Prevented double-prepending of `[ne]` tags.
-* **Alignment Safety**: Increased repetition tolerance in `alignment_stream_analyzer.py` to stop early audio cutoffs on long Nepali vowels.
+## Disclaimer
 
-## 📄 License & Credits
-* Original architecture by **Resemble AI**.
-* Fine-tuning and Nepali optimization by **officialuser**.
-* Reference Audio in samples by **Achyut Ghimire (Bulbul)**.
-* Distributed under the **MIT License**.
+This is a community fine-tune and is not officially affiliated with or endorsed by Resemble AI. Use responsibly. Do not use this model to generate misleading or harmful audio content. All generated audio includes [PerTh watermarking](https://github.com/resemble-ai/perth) from the upstream model.

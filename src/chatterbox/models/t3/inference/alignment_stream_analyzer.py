@@ -167,7 +167,7 @@ class AlignmentStreamAnalyzer:
         
         if token_repetition:
             repeated_token = self.generated_tokens[-1]
-            logger.warning(f"🚨 Detected abnormal 15x repetition of acoustic token {repeated_token}")
+            logger.warning(f"Detected abnormal 15x repetition of acoustic token {repeated_token}")
             
         # Suppress EoS to prevent early termination
         # Fix: Devanagari argmax attention can lag far behind text position. 

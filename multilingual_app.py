@@ -103,6 +103,10 @@ LANGUAGE_CONFIG = {
         "audio": "https://storage.googleapis.com/chatterbox-demo-samples/mtl_prompts/zh_f2.flac",
         "text": "上个月，我们达到了一个新的里程碑. 我们的YouTube频道观看次数达到了二十亿次，这绝对令人难以置信。"
     },
+    "ne": {
+        "audio": "https://huggingface.co/Firoj112/chatterbox-nepali-runs/resolve/main/sample_epoch_45.wav",
+        "text": "नमस्ते, म नेपालीमा पनि राम्रोसँग बोल्न सक्छु। मेरो आवाज कस्तो छ? के तपाईंलाई यो मन पर्यो?"
+    }
 }
 
 # --- UI Helpers ---
@@ -117,7 +121,12 @@ def default_text_for_ui(lang: str) -> str:
 def get_supported_languages_display() -> str:
     """Generate a formatted display of all supported languages."""
     language_items = []
-    for code, name in sorted(SUPPORTED_LANGUAGES.items()):
+    # Ensure 'ne' is included if not in SUPPORTED_LANGUAGES yet
+    all_langs = SUPPORTED_LANGUAGES.copy()
+    if "ne" not in all_langs:
+        all_langs["ne"] = "Nepali"
+        
+    for code, name in sorted(all_langs.items()):
         language_items.append(f"**{name}** (`{code}`)")
     
     # Split into 2 lines
@@ -126,7 +135,7 @@ def get_supported_languages_display() -> str:
     line2 = " • ".join(language_items[mid:])
     
     return f"""
-### 🌍 Supported Languages ({len(SUPPORTED_LANGUAGES)} total)
+### 🌍 Supported Languages ({len(all_langs)} total)
 {line1}
 
 {line2}
@@ -140,7 +149,22 @@ def get_or_load_model():
     if MODEL is None:
         print("Model not loaded, initializing...")
         try:
+            # 1. Load the base model structure
             MODEL = ChatterboxMultilingualTTS.from_pretrained(DEVICE)
+            
+            # 2. Load the fine-tuned/merged weights
+            import os
+            merged_weights = "t3_mtl_nepali_merged.safetensors"
+            if os.path.exists(merged_weights):
+                print(f"Applying merged Nepali weights from {merged_weights}...")
+                from safetensors.torch import load_file
+                state_dict = load_file(merged_weights)
+                # Strip prefixes if present
+                cleaned_state = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in state_dict.items()}
+                MODEL.t3.load_state_dict(cleaned_state, strict=False)
+            else:
+                print(f"Warning: {merged_weights} not found. Running with base multilingual model.")
+
             if hasattr(MODEL, 'to') and str(MODEL.device) != DEVICE:
                 MODEL.to(DEVICE)
             print(f"Model loaded successfully. Internal device: {getattr(MODEL, 'device', 'N/A')}")

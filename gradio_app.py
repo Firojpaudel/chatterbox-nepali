@@ -33,7 +33,8 @@ CHECKPOINTS = {
     "nepali-epoch-30": "t3_nepali_epoch_30.pt",
     "nepali-epoch-40": "t3_nepali_epoch_40.pt",
     "nepali-epoch-45": "t3_nepali_epoch_45.pt",
-    "nepali-final": "t3_mtl_nepali_final.safetensors"
+    "nepali-final": "t3_mtl_nepali_final.safetensors",
+    "nepali-merged": "t3_mtl_nepali_merged.safetensors",  # 0.7 FT / 0.3 Base blend
 }
 
 EVENT_TAGS = [
@@ -84,7 +85,15 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 model = None
 BASE_T3_STATE = None
 FINETUNE_STATES = {}
-CURRENT_MODEL_TYPE = "nepali-final"
+CURRENT_MODEL_TYPE = "nepali-merged"  # Default to merged model
+
+def set_seed(seed: int):
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    random.seed(seed)
+    np.random.seed(seed)
 
 # Supported Languages mapping
 SUPPORTED_LANGUAGES = {
@@ -115,7 +124,10 @@ def get_or_load_model():
         except Exception as e:
             print(f"Skipping {name}: {e}")
 
-    if "nepali-final" in FINETUNE_STATES: 
+    if "nepali-merged" in FINETUNE_STATES:
+        model.t3.load_state_dict(FINETUNE_STATES["nepali-merged"], strict=False)
+        CURRENT_MODEL_TYPE = "nepali-merged"
+    elif "nepali-final" in FINETUNE_STATES: 
         model.t3.load_state_dict(FINETUNE_STATES["nepali-final"], strict=False)
         CURRENT_MODEL_TYPE = "nepali-final"
     return model
@@ -174,10 +186,10 @@ def generate_tts_audio(
     
     if enable_sanitizer:
         text_input = sanitize_text(text_input, lang=language_id)
-        print(f"\n✨ \033[94mSanitized Text:\033[0m {text_input}")
+        print(f"Sanitized Text: {text_input}")
     
     chunks = smart_chunk(text_input) if enable_chunking else [text_input]
-    print(f"\n📦 \033[92mSplit into {len(chunks)} chunk(s). Starting synthesis...\033[0m")
+    print(f"Split into {len(chunks)} chunk(s). Starting synthesis...")
 
     model.prepare_conditionals(wav_fpath=ref_path, exaggeration=exaggeration_input)
     
@@ -191,8 +203,8 @@ def generate_tts_audio(
         if not chunk.strip(): continue
         
         chunk_start = time.time()
-        print(f"\n🎙️  \033[93m[Processing Chunk {i+1}/{len(chunks)}]\033[0m")
-        print(f"   \" {chunk.strip()[:100]}... \"")
+        print(f"[Processing Chunk {i+1}/{len(chunks)}]")
+        print(f"   {chunk.strip()[:100]}")
         
         # Add tiny trailing space
         if not chunk.endswith(" "): chunk += " "
@@ -207,7 +219,7 @@ def generate_tts_audio(
             all_wavs.append(wav.squeeze(0).cpu().numpy())
         
         chunk_elapsed = time.time() - chunk_start
-        print(f"   ✅ \033[92mChunk {i+1} done in {chunk_elapsed:.1f}s\033[0m")
+        print(f"   Chunk {i+1} done in {chunk_elapsed:.1f}s")
 
     if not all_wavs: return None
     
@@ -216,7 +228,7 @@ def generate_tts_audio(
         final_wav = librosa.effects.time_stretch(final_wav, rate=speed_input)
 
     total_elapsed = time.time() - total_start
-    print(f"\n🎉 \033[95mSUCCESS: All {len(chunks)} chunks synthesized in {total_elapsed:.1f}s total!\033[0m\n")
+    print(f"SUCCESS: All {len(chunks)} chunks synthesized in {total_elapsed:.1f}s total!")
     return (model.sr, final_wav)
 
 # ===================== GRADIO UI =====================
@@ -245,8 +257,12 @@ with gr.Blocks(title="WiseYak Nepali TTS", css=CUSTOM_CSS) as demo:
             ref_wav = gr.Audio(label="OR Upload Custom Reference", type="filepath")
 
         with gr.Column(scale=1):
-            model_selector = gr.Radio(choices=["base", "nepali-epoch-30", "nepali-epoch-40", "nepali-epoch-45", "nepali-final"], value="nepali-final", label="Checkpoint")
-            model_status = gr.Markdown(f"**Status:** `Active: nepali-final`")
+            model_selector = gr.Radio(
+                choices=["base", "nepali-epoch-30", "nepali-epoch-40", "nepali-epoch-45", "nepali-final", "nepali-merged"],
+                value="nepali-merged",
+                label="Checkpoint"
+            )
+            model_status = gr.Markdown(f"**Status:** `Active: nepali-merged`")
             
             exaggeration = gr.Slider(0.0, 3.0, value=0.0, step=0.1, label="Exaggeration")
             cfg_weight = gr.Slider(0.0, 3.0, value=0.8, step=0.1, label="CFG (Pace)")

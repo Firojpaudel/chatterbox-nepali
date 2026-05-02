@@ -420,7 +420,7 @@ class T3(nn.Module):
 
             # Check for EOS token.
             if next_token.view(-1) == self.hp.stop_speech_token:
-                logger.info(f"✅ EOS token detected! Stopping generation at step {i+1}")
+                logger.info(f"DONE: EOS token detected! Stopping generation at step {i+1}")
                 break
 
             # Get embedding for the new token.
@@ -453,7 +453,7 @@ class T3(nn.Module):
             # Add an 8-token buffer (~300ms) to ensure the final word's reverb/breath isn't cut off
             trim_to = min(trim_to + 8, predicted_tokens.shape[1])
             if trim_to < predicted_tokens.shape[1]:
-                print(f"✂️ Trimming {predicted_tokens.shape[1] - trim_to} hallucinated tokens from the end.")
+                print(f"Trimming {predicted_tokens.shape[1] - trim_to} hallucinated tokens from the end.")
                 predicted_tokens = predicted_tokens[:, :trim_to]
         
         return predicted_tokens
