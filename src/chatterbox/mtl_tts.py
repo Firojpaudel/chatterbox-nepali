@@ -151,7 +151,11 @@ class ChatterboxMultilingualTTS:
         self.tokenizer = tokenizer
         self.device = device
         self.conds = conds
-        self.watermarker = perth.PerthImplicitWatermarker()
+        try:
+            self.watermarker = perth.PerthImplicitWatermarker()
+        except (AttributeError, ImportError) as e:
+            print(f"Warning: Could not initialize perth watermarker ({e}). Skipping watermarking.")
+            self.watermarker = None
 
     @classmethod
     def get_supported_languages(cls):
