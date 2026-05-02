@@ -31,8 +31,6 @@ wheels/
 MANIFEST
 
 # PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
 
@@ -42,14 +40,39 @@ pip-delete-this-directory.txt
 
 syn_out/
 checkpoints/
-.gradio
+.gradio/
+.cache/
 
-# Ignore generated sample .wav files
-**/*.wav
+# Generated audio files (keep reference samples)
+*.wav
+gradio_output.wav
+
+# macOS
 .DS_Store
 
-# Model checkpoints (hosted on Hugging Face)
+# Model checkpoints (hosted on Hugging Face, not in git)
 *.safetensors
 *.pt
 
+# Virtual environments
 .venv/
+
+# Dev/scratch files (not for GitHub)
+scratch/
+upload_to_hf.py
+sanitized_output_final.txt
+model_architecture.txt
+README_HUGGINGFACE.md
+README_TRAIN_NEPALI.md
+saigrace.mp3
+nepali_test_output.wav
+test_english_local.wav
+test_english_merged.wav
+test_nepali_local.wav
+
+# Deprecated/experimental scripts (kept locally only)
+gradio_nepali.py
+interactive_tts.py
+test_forgetting.py
+test_nepali.py
+chatterbox-nepali-finetune.ipynb

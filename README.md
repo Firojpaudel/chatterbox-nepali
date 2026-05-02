@@ -47,10 +47,10 @@ pip install -e .
 ```python
 from huggingface_hub import hf_hub_download
 
-# Download the merged model (recommended — best balance of Nepali + English)
+# Download the final model (default — best Nepali quality)
 hf_hub_download(
     repo_id="Firoj112/chatterbox-nepali-runs",
-    filename="t3_mtl_nepali_merged.safetensors",
+    filename="t3_mtl_nepali_final.safetensors",
     local_dir="."
 )
 ```
@@ -69,7 +69,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 model = ChatterboxMultilingualTTS.from_pretrained(device)
 
 # Load Nepali-tuned weights
-state_dict = load_file("t3_mtl_nepali_merged.safetensors")
+state_dict = load_file("t3_mtl_nepali_final.safetensors")
 clean_state = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in state_dict.items()}
 model.t3.load_state_dict(clean_state, strict=False)
 model.t3.eval()
@@ -103,8 +103,8 @@ All weights are on [Hugging Face](https://huggingface.co/Firoj112/chatterbox-nep
 
 | File | Recommendation | Description |
 | :--- | :--- | :--- |
-| `t3_mtl_nepali_merged.safetensors` | **Best for most use cases** | 70% fine-tuned + 30% base (balanced) |
-| `t3_mtl_nepali_final.safetensors` | Best Nepali quality | Pure 50-epoch fine-tune (English degraded) |
+| `t3_mtl_nepali_final.safetensors` | **Default** | Pure 50-epoch fine-tune (best Nepali quality) |
+| `t3_mtl_nepali_merged.safetensors` | Balanced | 70% fine-tuned + 30% base (better English) |
 | `t3_nepali_epoch_45.pt` | Research | Epoch 45 checkpoint |
 | `t3_nepali_epoch_40.pt` | Research | Epoch 40 checkpoint |
 | `t3_nepali_epoch_30.pt` | Research | Epoch 30 checkpoint |
