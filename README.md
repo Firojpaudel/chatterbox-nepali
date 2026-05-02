@@ -8,6 +8,7 @@
 
 [![Hugging Face - Weights](https://img.shields.io/badge/HuggingFace-Weights-yellow?logo=huggingface)](https://huggingface.co/Firoj112/chatterbox-nepali-runs)
 [![Base Model](https://img.shields.io/badge/Base-ResembleAI%2Fchatterbox-blue?logo=github)](https://github.com/resemble-ai/chatterbox)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Firojpaudel/chatterbox-nepali/blob/master/Chatterbox_Nepali_Colab.ipynb)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ---
@@ -105,6 +106,12 @@ python gradio_app.py
 # Or use the upstream multilingual app (now with Nepali support)
 python multilingual_app.py
 ```
+
+### Cloud Inference (Google Colab)
+
+If you don't have a local GPU, you can run the full Gradio interface on Google Colab for free:
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Firojpaudel/chatterbox-nepali/blob/master/Chatterbox_Nepali_Colab.ipynb)
 
 ---
 

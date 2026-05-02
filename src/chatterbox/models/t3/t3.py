@@ -279,6 +279,7 @@ class T3(nn.Module):
         length_penalty=1.0,
         repetition_penalty=1.2,
         cfg_weight=0.5,
+        enable_protection=True,
     ):
         """
         Args:
@@ -309,9 +310,9 @@ class T3(nn.Module):
         # TODO? synchronize the expensive compile function
         # with self.compile_lock:
         if not self.compiled:
-            # Default to None for English models, only create for multilingual
+            # Default to None for English models, only create for multilingual if protection enabled
             alignment_stream_analyzer = None
-            if self.hp.is_multilingual:
+            if self.hp.is_multilingual and enable_protection:
                 alignment_stream_analyzer = AlignmentStreamAnalyzer(
                     self.tfmr,
                     None,

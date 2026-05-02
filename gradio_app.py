@@ -133,21 +133,39 @@ def get_or_load_model():
     return model
 
 def switch_model(model_type):
-    global CURRENT_MODEL_TYPE, model
-    if model is None: return "Model not loaded"
-    if model_type in FINETUNE_STATES:
-        model.t3.load_state_dict(FINETUNE_STATES[model_type], strict=False)
-        model.t3.to(DEVICE).eval()
-        model.t3.compiled = False
-        CURRENT_MODEL_TYPE = model_type
-        return f"Active: {model_type}"
-    elif model_type == "base":
-        model.t3.load_state_dict(BASE_T3_STATE, strict=True)
-        model.t3.to(DEVICE).eval()
-        model.t3.compiled = False
-        CURRENT_MODEL_TYPE = "base"
-        return "Active: Base"
-    return f"Unknown: {model_type}"
+    global CURRENT_MODEL_TYPE, model, BASE_T3_STATE
+    if model is None: 
+        print("Error: Model not loaded yet!")
+        return "Model not loaded"
+    
+    try:
+        if model_type in FINETUNE_STATES:
+            print(f"--- Switching to fine-tuned model: {model_type} ---")
+            model.t3.load_state_dict(FINETUNE_STATES[model_type], strict=False)
+            model.t3.to(DEVICE).eval()
+            model.t3.compiled = False
+            CURRENT_MODEL_TYPE = model_type
+            print(f"Successfully loaded {model_type}")
+            return f"Active: {model_type}"
+        elif model_type == "base":
+            print("--- Switching to Base Multilingual model ---")
+            if BASE_T3_STATE is None:
+                print("Error: BASE_T3_STATE is missing!")
+                return "Base state missing"
+            model.t3.load_state_dict(BASE_T3_STATE, strict=True)
+            model.t3.to(DEVICE).eval()
+            model.t3.compiled = False
+            CURRENT_MODEL_TYPE = "base"
+            print("Successfully loaded Base model")
+            return "Active: Base"
+        else:
+            print(f"Error: Unknown model type {model_type}")
+            return f"Unknown: {model_type}"
+    except Exception as e:
+        print(f"CRITICAL ERROR during model switch: {e}")
+        import traceback
+        traceback.print_exc()
+        return f"Error: {str(e)}"
 
 def smart_chunk(text, max_chars=120):
     raw_chunks = re.split(r'([।\.?!\n])', text)
@@ -177,7 +195,7 @@ def smart_chunk(text, max_chars=120):
 def generate_tts_audio(
     text_input, language_id, ref_dropdown_input, audio_prompt_input,
     exaggeration_input, cfg_weight_input, temperature_input,
-    seed_num_input, enable_sanitizer, enable_chunking, speed_input,
+    seed_num_input, enable_sanitizer, enable_chunking, enable_protection, speed_input,
     repetition_penalty_input, top_p_input, min_p_input
 ):
     model = get_or_load_model()
@@ -214,7 +232,8 @@ def generate_tts_audio(
                 chunk, language_id=language_id, exaggeration=exaggeration_input,
                 cfg_weight=cfg_weight_input, temperature=temperature_input,
                 repetition_penalty=repetition_penalty_input, top_p=top_p_input,
-                min_p=min_p_input, max_new_tokens=max(128, int(len(chunk) * 4))
+                min_p=min_p_input, max_new_tokens=max(128, int(len(chunk) * 4)),
+                enable_protection=enable_protection
             )
             all_wavs.append(wav.squeeze(0).cpu().numpy())
         
@@ -250,6 +269,7 @@ with gr.Blocks(title="WiseYak Nepali TTS", css=CUSTOM_CSS) as demo:
             with gr.Row():
                 enable_sanitizer = gr.Checkbox(label="Aggressive Sanitizer", value=True)
                 enable_chunking = gr.Checkbox(label="Smart Chunking", value=True)
+                enable_protection = gr.Checkbox(label="Hallucination Protection", value=True)
             
             with gr.Row():
                 language_id = gr.Dropdown(choices=list(SUPPORTED_LANGUAGES.keys()), value="ne", label="Language")
@@ -293,10 +313,10 @@ with gr.Blocks(title="WiseYak Nepali TTS", css=CUSTOM_CSS) as demo:
         return None
 
     demo.load(fn=load_wrapper, outputs=None)
-    model_selector.change(fn=lambda m: (switch_model(m), f"**Status:** `Active: {m}`"), inputs=[model_selector], outputs=[model_status, model_status])
+    model_selector.change(fn=switch_model, inputs=[model_selector], outputs=[model_status])
     run_btn.click(
         fn=generate_tts_audio,
-        inputs=[text, language_id, ref_dropdown, ref_wav, exaggeration, cfg_weight, temp, seed_num, enable_sanitizer, enable_chunking, speed_slider, repetition_penalty, top_p, min_p],
+        inputs=[text, language_id, ref_dropdown, ref_wav, exaggeration, cfg_weight, temp, seed_num, enable_sanitizer, enable_chunking, enable_protection, speed_slider, repetition_penalty, top_p, min_p],
         outputs=[audio_output]
     )
 
