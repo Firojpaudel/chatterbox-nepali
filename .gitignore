@@ -63,7 +63,6 @@ upload_to_hf.py
 sanitized_output_final.txt
 model_architecture.txt
 README_HUGGINGFACE.md
-README_TRAIN_NEPALI.md
 saigrace.mp3
 nepali_test_output.wav
 test_english_local.wav
