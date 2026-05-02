@@ -118,7 +118,7 @@ python multilingual_app.py
 
 If you don't have a local GPU, you can run the full Gradio interface on Google Colab for free:
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Firojpaudel/chatterbox-nepali/blob/main/Chatterbox_Nepali_Colab_FP.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Firojpaudel/chatterbox-nepali/blob/main/Chatterbox_NP_run.ipynb)
 
 ---
 
