@@ -302,6 +302,8 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         state_dicts = {}
         hf_llama_weights = {}
         for name, weight in weights:
+            if "embed_tokens.weight" in name:
+                print(f"DEBUG: {name} shape: {weight.shape}")
             # Llama weights need to be passed through vllm's load_weights rather than load_state_dict
             if name.startswith("tfmr."):
                 subname = name[5:]
