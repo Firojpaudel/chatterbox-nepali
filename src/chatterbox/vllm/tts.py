@@ -184,8 +184,8 @@ class ChatterboxTTS:
                 # 1D weights: [1024] (biases/norms)
                 elif v.dim() == 1 and v.shape[0] == 1024:
                     new_v = torch.zeros([target_dim], dtype=v.dtype, device=v.device)
-                    new_v[:1024] = v
-                    new_v[1024:2048] = v
+                    for i in range(0, target_dim, 1024):
+                        new_v[i:i+1024] = v
                     v = new_v
                 expanded[k] = v
             return expanded
@@ -193,8 +193,8 @@ class ChatterboxTTS:
         t3_enc = T3CondEnc(t3_config)
         enc_weights = {k.replace('cond_enc.', ''): v for k, v in t3_weights.items() if k.startswith('cond_enc.')}
         print(f"DEBUG: _load_cond_components - n_channels: {t3_config.n_channels}, target_device: {target_device}")
-        if t3_config.n_channels == 2048:
-            enc_weights = expand_weights(enc_weights)
+        if t3_config.n_channels > 1024:
+            enc_weights = expand_weights(enc_weights, target_dim=t3_config.n_channels)
             # Print a few shapes to verify expansion
             for k in list(enc_weights.keys())[:3]:
                 print(f"DEBUG: Expanded {k} shape: {list(enc_weights[k].shape)}")
@@ -203,15 +203,15 @@ class ChatterboxTTS:
 
         t3_speech_emb = torch.nn.Embedding(t3_config.speech_tokens_dict_size, t3_config.n_channels)
         emb_weights = {k.replace('speech_emb.', ''): v for k, v in t3_weights.items() if k.startswith('speech_emb.')}
-        if t3_config.n_channels == 2048:
-            emb_weights = expand_weights(emb_weights)
+        if t3_config.n_channels > 1024:
+            emb_weights = expand_weights(emb_weights, target_dim=t3_config.n_channels)
         t3_speech_emb.load_state_dict(emb_weights)
         t3_speech_emb = t3_speech_emb.to(device=target_device).eval()
 
         t3_speech_pos_emb = LearnedPositionEmbeddings(t3_config.max_speech_tokens + 2 + 2, t3_config.n_channels)
         pos_weights = {k.replace('speech_pos_emb.', ''): v for k, v in t3_weights.items() if k.startswith('speech_pos_emb.')}
-        if t3_config.n_channels == 2048:
-            pos_weights = expand_weights(pos_weights)
+        if t3_config.n_channels > 1024:
+            pos_weights = expand_weights(pos_weights, target_dim=t3_config.n_channels)
         t3_speech_pos_emb.load_state_dict(pos_weights)
         t3_speech_pos_emb = t3_speech_pos_emb.to(device=target_device).eval()
 
