@@ -115,9 +115,17 @@ def get_or_load_model(use_vllm=False):
     
     if use_vllm:
         if vllm_model is not None: return vllm_model
+        # Free the standard model from GPU before loading vLLM — they can't coexist on T4
+        if model is not None:
+            print("⚠️ Unloading standard model to free GPU memory for vLLM...")
+            model.cpu()
+            del model
+            model = None
+            BASE_T3_STATE = None
+            gc.collect()
+            torch.cuda.empty_cache()
+            print(f"   GPU memory freed: {torch.cuda.memory_allocated()/1e9:.2f}GB allocated")
         print("Loading Chatterbox vLLM model...")
-        # For vLLM, we use the specialized loader
-        # We assume 'nepali-merged' or 'nepali-final' as default
         model_name = CHECKPOINTS.get(CURRENT_MODEL_TYPE, "t3_mtl_nepali_merged.safetensors")
         vllm_model = ChatterboxTTS.from_nepali(model_filename=model_name)
         return vllm_model
