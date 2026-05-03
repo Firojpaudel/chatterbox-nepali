@@ -159,7 +159,8 @@ class T3MultiModalProcessor(BaseMultiModalProcessor[T3ProcessingInfo]):
 class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str):
         super().__init__()
-        vllm_config.model_config.hf_config.hidden_size = 1024
+        # TRICK: Set hidden_size to 2048 so vLLM allocates double cache/buffers
+        vllm_config.model_config.hf_config.hidden_size = 2048
         self.vllm_config = vllm_config
         self.cfg: ModelConfig = vllm_config.model_config
 
@@ -168,7 +169,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         is_multilingual = getattr(self.cfg.hf_config, 'is_multilingual', True)
         self.t3conf = T3Config.multilingual() if is_multilingual else T3Config()
         
-        self.dim = self.t3conf.n_channels
+        self.dim = self.t3conf.n_channels # This is still 1024
         self.cond_enc = T3CondEnc(self.t3conf)
         self.text_emb = nn.Embedding(self.t3conf.text_tokens_dict_size, self.dim)
         self.speech_emb = nn.Embedding(self.t3conf.speech_tokens_dict_size, self.dim)
@@ -190,22 +191,27 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         state_dicts = {}
         hf_llama_weights = {}
         
-        valid_llama_suffixes = {
-            "embed_tokens.weight", "norm.weight", "layers.",
-            "self_attn.q_proj.weight", "self_attn.k_proj.weight", "self_attn.v_proj.weight", "self_attn.o_proj.weight",
-            "mlp.gate_proj.weight", "mlp.up_proj.weight", "mlp.down_proj.weight",
-            "input_layernorm.weight", "post_attention_layernorm.weight"
-        }
-
         for raw_name, weight in weights:
             name = raw_name
             if "tfmr." in name:
                 subname = name[name.find("tfmr.")+5:]
-                if any(suffix in subname for suffix in valid_llama_suffixes):
-                    if subname == "embed_tokens.weight" and weight.shape[0] < 32000:
-                        padding = torch.zeros((32000 - weight.shape[0], weight.shape[1]), dtype=weight.dtype, device=weight.device)
-                        weight = torch.cat([weight, padding], dim=0)
-                    hf_llama_weights[subname] = weight
+                
+                # Expand weights to 2048 dimensions using block-diagonal replication
+                if "qkv_proj.weight" in subname:
+                    # Original: [3072, 1024] -> New: [6144, 2048]
+                    q, k, v = weight.chunk(3, dim=0)
+                    new_q = torch.block_diag(q, q)
+                    new_k = torch.block_diag(k, k)
+                    new_v = torch.block_diag(v, v)
+                    weight = torch.cat([new_q, new_k, new_v], dim=0)
+                elif any(x in subname for x in ["o_proj.weight", "gate_proj.weight", "up_proj.weight", "down_proj.weight"]):
+                    weight = torch.block_diag(weight, weight)
+                elif "embed_tokens.weight" in subname:
+                    weight = torch.cat([weight, weight], dim=1)
+                elif "norm.weight" in subname:
+                    weight = torch.cat([weight, weight], dim=0)
+
+                hf_llama_weights[subname] = weight
                 continue
             
             loaded_params.add(raw_name)
@@ -320,6 +326,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         return torch.cat(out, dim=0).contiguous()
 
     def compute_logits(self, hidden_states: torch.Tensor, sampling_metadata: SamplingMetadata) -> torch.Tensor:
+        # Split the 2048 hidden state back into Cond and Uncond
         cond_hs, uncond_hs = hidden_states.split([self.dim, self.dim], dim=1)
         cond_logits = self.logits_processor(self.speech_head, cond_hs, sampling_metadata)
         uncond_logits = self.logits_processor(self.speech_head, uncond_hs, sampling_metadata)
@@ -333,27 +340,19 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             mm_data = self.get_multimodal_embeddings(**kwargs)
             inputs_embeds = self.get_input_embeddings(input_ids, mm_data)
 
-        # Architectural Split for CFG
-        cond_embeds, uncond_embeds = inputs_embeds.split([self.dim, self.dim], dim=1)
-        
-        # Batch doubling for Llama backbone
-        doubled_positions = torch.cat([positions, positions], dim=0).long().contiguous()
-        doubled_embeds = torch.cat([cond_embeds, uncond_embeds], dim=0).contiguous()
-
         # SANITIZER: Only pass arguments that LlamaModel.forward() explicitly expects.
-        # This prevents TypeError from vLLM's multi-modal metadata (like 'conditionals').
         valid_args = ["kv_caches", "attn_metadata", "sampling_metadata"]
         backbone_kwargs = {k: v for k, v in kwargs.items() if k in valid_args}
         
-        hidden_states = self.tfmr(
+        # We pass the [N, 2048] embeddings directly. 
+        # vLLM sees N tokens, so positions/metadata match.
+        # Backbone processes 2048 dims independently thanks to block-diagonal weight expansion.
+        return self.tfmr(
             input_ids=None,
-            positions=doubled_positions,
-            intermediate_tensors=None, # Force re-derivation to avoid shape mismatch
-            inputs_embeds=doubled_embeds,
+            positions=positions,
+            intermediate_tensors=intermediate_tensors,
+            inputs_embeds=inputs_embeds,
             **backbone_kwargs
         )
-        
-        h_cond, h_uncond = hidden_states.split([len(cond_embeds), len(uncond_embeds)], dim=0)
-        return torch.cat([h_cond, h_uncond], dim=1).contiguous()
 
     def get_language_model(self) -> torch.nn.Module: return self.tfmr
