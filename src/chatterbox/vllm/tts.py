@@ -174,6 +174,10 @@ class ChatterboxTTS:
         t3_speech_pos_emb.load_state_dict({ k.replace('speech_pos_emb.', ''):v for k,v in t3_weights.items() if k.startswith('speech_pos_emb.') })
         t3_speech_pos_emb = t3_speech_pos_emb.to(device=target_device).eval()
 
+        # Free the 2.14GB weights dictionary from System RAM before vLLM loads the model
+        del t3_weights
+        import gc; gc.collect()
+
         # vLLM setup
         total_gpu_memory = torch.cuda.get_device_properties(0).total_memory
         unused_gpu_memory = total_gpu_memory - torch.cuda.memory_allocated()
@@ -198,6 +202,7 @@ class ChatterboxTTS:
             "enforce_eager": not compile,
             "max_model_len": max_model_len,
             "trust_remote_code": True,
+            "swap_space": 0,  # Disable CPU swap to save 4GB of System RAM
         }
 
         t3 = LLM(**{**base_vllm_kwargs, **kwargs})
