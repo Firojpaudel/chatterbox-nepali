@@ -9,7 +9,11 @@ from transformers.feature_extraction_utils import BatchFeature
 from vllm.config import VllmConfig, ModelConfig
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.vocab_parallel_embedding import ParallelLMHead
-from vllm.model_executor.models.interfaces import MultiModalEmbeddings, SupportsMultiModal, supports_vllm_gen
+try:
+    from vllm.model_executor.models.interfaces import MultiModalEmbeddings, SupportsMultiModal, supports_vllm_gen
+except ImportError:
+    from vllm.model_executor.models.interfaces import MultiModalEmbeddings, SupportsMultiModal
+    def supports_vllm_gen(cls): return cls
 from vllm.model_executor.models.interfaces_base import VllmModelForTextGeneration
 from vllm.model_executor.models.llama import LlamaModel
 from vllm.model_executor.sampling_metadata import SamplingMetadata
