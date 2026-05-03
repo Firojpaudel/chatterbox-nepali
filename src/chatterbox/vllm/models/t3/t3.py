@@ -302,6 +302,12 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         state_dicts = {}
         hf_llama_weights = {}
         for name, weight in weights:
+            # Strip prefixes from Nepali fine-tuned checkpoints
+            if name.startswith("patched_model."):
+                name = name[len("patched_model."):]
+            if name.startswith("model."):
+                name = name[len("model."):]
+
             # Llama weights need to be passed through vllm's load_weights rather than load_state_dict
             if name.startswith("tfmr."):
                 subname = name[5:]
@@ -315,8 +321,8 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
         for attr, state_dict in state_dicts.items():
             if hasattr(self, attr):
-                # print("Loading weights:", attr, state_dict.keys())
-                getattr(self, attr).load_state_dict(state_dict)
+                print(f"Loading vLLM weights: {attr} ({list(state_dict.keys())})")
+                getattr(self, attr).load_state_dict(state_dict, strict=False)
 
         llama_loaded_params = self.tfmr.load_weights(hf_llama_weights.items())
         loaded_params.update('tfmr.' + i for i in llama_loaded_params)
