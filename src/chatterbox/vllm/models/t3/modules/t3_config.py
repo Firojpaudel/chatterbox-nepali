@@ -14,6 +14,7 @@ T3_CONFIG = {
 
 class T3Config:
     def __init__(self, **kwargs):
+        # Core Transformer dimensions
         self.n_channels = kwargs.get("hidden_size", 2048)
         self.intermediate_size = kwargs.get("intermediate_size", 8192)
         self.n_heads = kwargs.get("num_attention_heads", 32)
@@ -24,13 +25,14 @@ class T3Config:
         self.rope_theta = kwargs.get("rope_theta", 10000.0)
         self.max_position_embeddings = kwargs.get("max_position_embeddings", 1000)
         
-        # COMPLETE FIELD SET for CondEnc & Components
+        # Conditioning Encoder required fields
         self.encoder_type = "voice_encoder"
+        self.speaker_embed_size = 256
+        self.emotion_adv = True
+        self.use_perceiver_resampler = True
         self.n_conditioning_tokens = 34
         self.conditioning_dim = 1024
         self.n_audio_tokens = 1
-        self.speaker_embed_size = 256
-        self.text_embed_size = 1024
         self.hf_config = None
 
     @classmethod
