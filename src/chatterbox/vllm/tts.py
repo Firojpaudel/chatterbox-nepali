@@ -358,6 +358,24 @@ class ChatterboxTTS:
             except Exception:
                 shutil.copy(path, dest)
 
+        # 3. Detect layer count from weights
+        from safetensors.torch import load_file
+        num_layers = 25 # fallback
+        try:
+            weights_meta = load_file(nepali_path, device="cpu")
+            max_layer = -1
+            for k in weights_meta.keys():
+                if k.startswith("tfmr.layers."):
+                    parts = k.split(".")
+                    if len(parts) > 2 and parts[2].isdigit():
+                        max_layer = max(max_layer, int(parts[2]))
+            if max_layer != -1:
+                num_layers = max_layer + 1
+                print(f"🔍 Auto-detected {num_layers} layers in {nepali_path}")
+            del weights_meta # Free memory
+        except Exception as e:
+            print(f"Warning: Could not auto-detect layer count: {e}")
+
         # Ensure config.json exists (ESSENTIAL for vLLM to recognize the architecture)
         config_dest = vllm_cache_dir / "config.json"
         if config_repo_path:
@@ -372,7 +390,7 @@ class ChatterboxTTS:
                 "architectures": ["T3VllmModel"],
                 "hidden_size": 1024,
                 "num_attention_heads": 16,
-                "num_hidden_layers": 25,
+                "num_hidden_layers": num_layers,
                 "intermediate_size": 4096,
                 "max_position_embeddings": 2048,
                 "vocab_size": 8,
@@ -383,14 +401,14 @@ class ChatterboxTTS:
                 json.dump(config_data, f, indent=2)
             print(f"Generated default vLLM config at {config_dest}")
         
-        # 4. Final sanity check: Overwrite vocab_size to 2455 (critical for weight loading)
+        # 4. Final sanity check: Overwrite vocab_size and num_layers
         try:
             with open(config_dest, "r") as f:
                 cfg_data = json.load(f)
-            if cfg_data.get("vocab_size") != 8 or cfg_data.get("num_hidden_layers") != 25:
-                print(f"🔧 Forcing config update: vocab_size=8, layers=25 in {config_dest}")
+            if cfg_data.get("vocab_size") != 8 or cfg_data.get("num_hidden_layers") != num_layers:
+                print(f"🔧 Forcing config update: vocab_size=8, layers={num_layers} in {config_dest}")
                 cfg_data["vocab_size"] = 8
-                cfg_data["num_hidden_layers"] = 25
+                cfg_data["num_hidden_layers"] = num_layers
                 with open(config_dest, "w") as f:
                     json.dump(cfg_data, f, indent=2)
         except Exception as e:
