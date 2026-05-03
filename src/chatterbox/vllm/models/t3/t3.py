@@ -257,10 +257,6 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str):
         super().__init__()
-        # HACK: We changed the hidden size to 2048 to trick VLLM into thinking that the model has a hidden size of 2048.
-        #       This is needed to accomodate the extra data for the CFG uncond prompt.
-        #       We need to change it back to 1024 for loading the actual llama model.
-        vllm_config.model_config.hf_config.hidden_size = 1024
         self.vllm_config = vllm_config
         self.cfg: ModelConfig = vllm_config.model_config
 
@@ -305,12 +301,11 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             # Llama weights need to be passed through vllm's load_weights rather than load_state_dict
             if name.startswith("tfmr."):
                 subname = name[5:]
-                if subname == "embed_tokens.weight":
-                    target_vocab = self.vllm_config.model_config.hf_config.vocab_size
-                    if weight.shape[0] < target_vocab:
-                        # Pad the weight matrix so it matches the larger logical vocab size expected by vLLM kernels
-                        padding = torch.zeros((target_vocab - weight.shape[0], weight.shape[1]), dtype=weight.dtype, device=weight.device)
-                        weight = torch.cat([weight, padding], dim=0)
+                target_vocab = 32000
+                if weight.shape[0] < target_vocab:
+                    # Pad the weight matrix so it matches the larger logical vocab size expected by vLLM kernels
+                    padding = torch.zeros((target_vocab - weight.shape[0], weight.shape[1]), dtype=weight.dtype, device=weight.device)
+                    weight = torch.cat([weight, padding], dim=0)
                 hf_llama_weights[subname] = weight
                 continue
             loaded_params.add(name)
@@ -598,15 +593,8 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         # print("t3/compute_logits/hidden_states", hidden_states.shape, hidden_states.dtype)
         # print("t3/compute_logits/sampling_metadata", sampling_metadata)
 
-        # Split the hidden state vector into the three parts
-        cond_hidden_states, uncond_hidden_states = hidden_states.split([self.dim, self.dim], dim=1)
-        # print("t3/compute_logits/normal_hidden_states", normal_hidden_states.shape, normal_hidden_states.dtype)
-        # print("t3/compute_logits/cfg_hidden_states", cfg_hidden_states.shape, cfg_hidden_states.dtype)
+        logits = self.logits_processor(self.speech_head, hidden_states, sampling_metadata)
 
-        cond_logits = self.logits_processor(self.speech_head, cond_hidden_states, sampling_metadata)
-        uncond_logits = self.logits_processor(self.speech_head, uncond_hidden_states, sampling_metadata)
-
-        logits = cond_logits + self.cfg_scale * (cond_logits - uncond_logits)
 
         # print("t3/compute_logits/logit with the highest probability (cond, uncond, post-cfg):", cond_logits.argmax(), uncond_logits.argmax(), logits.argmax())
 
@@ -637,21 +625,11 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         # print("t3/input_ids", input_ids)
         # print("t3/kwargs", kwargs)
 
-        if inputs_embeds is None:
-            inputs_embeds = self.get_input_embeddings(input_ids, [])
-
-        # Split the inputs_embeds into the three parts
-        cond_embeds, uncond_embeds = inputs_embeds.split([self.dim, self.dim], dim=1)
-        # print("t3/cond_embeds", cond_embeds.shape, cond_embeds.dtype)
-        # print("t3/uncond_embeds", uncond_embeds.shape, uncond_embeds.dtype)
-
-        # TODO: Apply speech positional embeddings here
-
         hidden_states = self.tfmr(
             input_ids=None,
-            positions=torch.cat([positions, positions], dim=0),
+            positions=positions,
             intermediate_tensors=None,
-            inputs_embeds=torch.cat([cond_embeds, uncond_embeds], dim=0)
+            inputs_embeds=inputs_embeds
         )
         # print("t3/hidden_states", hidden_states.shape, hidden_states.dtype)
 
