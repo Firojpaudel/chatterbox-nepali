@@ -159,22 +159,10 @@ class T3MultiModalProcessor(BaseMultiModalProcessor[T3ProcessingInfo]):
 class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str):
         super().__init__()
-        # ARCHITECTURAL LANE DOUBLING (1024 -> 2048)
-        # We must synchronize BOTH the high-level ModelConfig and the hf_config
-        # to ensure vLLM allocates the correct tensor sizes on the GPU.
-        hf = vllm_config.model_config.hf_config
-        hf.hidden_size *= 2
-        vllm_config.model_config.hidden_size = hf.hidden_size
-        
-        if hasattr(hf, "intermediate_size"):
-            hf.intermediate_size *= 2
-        if hasattr(hf, "num_attention_heads"):
-            hf.num_attention_heads *= 2
-        if hasattr(hf, "num_key_value_heads"):
-            hf.num_key_value_heads *= 2
-            
+        # Architectural parameters are now correctly set to 2048 dims in config.json via tts.py
         self.vllm_config = vllm_config
         self.cfg: ModelConfig = vllm_config.model_config
+        hf = vllm_config.model_config.hf_config
 
         self.tfmr = LlamaModel(vllm_config=vllm_config, prefix=prefix + ".tfmr")
         

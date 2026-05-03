@@ -391,41 +391,34 @@ class ChatterboxTTS:
 
         # Ensure config.json exists (ESSENTIAL for vLLM to recognize the architecture)
         config_dest = vllm_cache_dir / "config.json"
-        if config_repo_path:
-            config_dest.unlink(missing_ok=True)
-            try:
-                config_dest.symlink_to(config_repo_path)
-            except Exception:
-                shutil.copy(config_repo_path, config_dest)
-        else:
-            config_data = {
-                "model_type": "ChatterboxT3",
-                "architectures": ["T3VllmModel"],
-                "hidden_size": 1024,
-                "num_attention_heads": 16,
-                "num_hidden_layers": num_layers,
-                "intermediate_size": 4096,
-                "max_position_embeddings": 2048,
-                "vocab_size": 32000,
-                "tokenizer": "MtlTokenizer",
-                "torch_dtype": "float16"
-            }
-            with open(config_dest, "w") as f:
-                json.dump(config_data, f, indent=2)
-            print(f"Generated default vLLM config at {config_dest}")
         
-        # 4. Final sanity check: Overwrite vocab_size and num_layers
-        try:
-            with open(config_dest, "r") as f:
-                cfg_data = json.load(f)
-            if cfg_data.get("vocab_size") != 32000 or cfg_data.get("num_hidden_layers") != num_layers:
-                print(f"🔧 Forcing config update: vocab_size=32000, layers={num_layers} in {config_dest}")
-                cfg_data["vocab_size"] = 32000
-                cfg_data["num_hidden_layers"] = num_layers
-                with open(config_dest, "w") as f:
-                    json.dump(cfg_data, f, indent=2)
-        except Exception as e:
-            print(f"Warning: Could not perform final config sanity check: {e}")
+        # DEFINITIVE OVERLOAD: Force 2048 dimensions for Lane-CFG stability
+        config_data = {
+            "model_type": "ChatterboxT3",
+            "architectures": ["T3VllmModel"],
+            "hidden_size": 2048,
+            "num_attention_heads": 32,
+            "num_hidden_layers": num_layers,
+            "intermediate_size": 8192,
+            "num_key_value_heads": 16,
+            "max_position_embeddings": 2048,
+            "vocab_size": 32000,
+            "tokenizer": "MtlTokenizer",
+            "torch_dtype": "float16"
+        }
+        
+        # If a config exists, preserve custom flags but overwrite dimensions
+        if config_repo_path:
+            try:
+                with open(config_repo_path, "r") as f:
+                    repo_cfg = json.load(f)
+                config_data.update({k: v for k, v in repo_cfg.items() if k not in config_data})
+            except Exception:
+                pass
+
+        with open(config_dest, "w") as f:
+            json.dump(config_data, f, indent=2)
+        print(f"🚀 FORCED 2048-dim vLLM config at {config_dest}")
         
         model_vllm_path = vllm_cache_dir / "model.safetensors"
         model_vllm_path.unlink(missing_ok=True)
