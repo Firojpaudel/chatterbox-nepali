@@ -663,28 +663,26 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         inputs_embeds: Optional[torch.Tensor] = None,  # The actual inputs to the model
         **kwargs: object,
     ) -> torch.Tensor:
-        # Extract vLLM specific objects from kwargs
-        kv_caches = kwargs.get("kv_caches")
-        attn_metadata = kwargs.get("attn_metadata")
-
-        if inputs_embeds is None:
-            inputs_embeds = self.get_input_embeddings(input_ids, [])
+        # print("t3 ###")
+        # print("t3/inputs_embeds", inputs_embeds.shape if inputs_embeds is not None else None)
+        # print("t3/positions", positions.shape, positions.dtype)
 
         if self.SAFE_MODE:
-            # Manually run the transformer layers to bypass the broken embedding lookup in vLLM's LlamaModel
-            # Note: In vLLM 0.9.2, LlamaDecoderLayer.forward() only takes (positions, hidden_states, residual).
-            # kv_caches and attn_metadata are managed internally by the attention backend.
-            hidden_states = inputs_embeds
-            residual = None
-            for layer in self.tfmr.layers:
-                hidden_states, residual = layer(
-                    positions,
-                    hidden_states,
-                    residual,
-                )
-            hidden_states = self.tfmr.norm(hidden_states, residual)
+            # Delegate to self.tfmr (vLLM's LlamaModel) which handles:
+            # - Profile/dummy runs: inputs_embeds is None, uses its own padded embed_tokens (32000 entries)
+            # - Real inference: inputs_embeds is provided by vLLM's multimodal pipeline via get_input_embeddings()
+            hidden_states = self.tfmr(
+                input_ids=input_ids,
+                positions=positions,
+                intermediate_tensors=intermediate_tensors,
+                inputs_embeds=inputs_embeds,
+            )
             return hidden_states
         else:
+            if inputs_embeds is None:
+                # During profile/dummy runs, just delegate to tfmr with raw input_ids
+                return self.tfmr(input_ids=input_ids, positions=positions,
+                                 intermediate_tensors=intermediate_tensors, inputs_embeds=None)
             # Split the inputs_embeds into the three parts
             cond_embeds, uncond_embeds = inputs_embeds.split([self.dim, self.dim], dim=1)
             # print("t3/cond_embeds", cond_embeds.shape, cond_embeds.dtype)
