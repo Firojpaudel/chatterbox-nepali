@@ -118,7 +118,14 @@ def get_or_load_model(use_vllm=False):
         # Free the standard model from GPU before loading vLLM — they can't coexist on T4
         if model is not None:
             print("⚠️ Unloading standard model to free GPU memory for vLLM...")
-            model.cpu()
+            try:
+                # Move internal sub-models to CPU to free GPU memory
+                for attr_name in ['t3', 's3gen', 've']:
+                    sub = getattr(model, attr_name, None)
+                    if sub is not None and hasattr(sub, 'cpu'):
+                        sub.cpu()
+            except Exception as e:
+                print(f"   Warning during model offload: {e}")
             del model
             model = None
             BASE_T3_STATE = None
