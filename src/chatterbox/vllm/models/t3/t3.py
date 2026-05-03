@@ -372,13 +372,20 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     # We expand to self.dim (now 4096) with zero-padding to ensure stream isolation
                     target_dim = self.dim
                     if w.dim() == 2:
-                        new_w = torch.zeros([target_dim, w.shape[1] if w.shape[1] != 1024 else target_dim], dtype=w.dtype, device=w.device)
-                        if w.shape[1] == 1024:
-                            # 2D weight with 1024-dim input (e.g. Linear)
+                        out_dim = target_dim if w.shape[0] == 1024 else w.shape[0]
+                        in_dim = target_dim if w.shape[1] == 1024 else w.shape[1]
+                        new_w = torch.zeros([out_dim, in_dim], dtype=w.dtype, device=w.device)
+                        
+                        if w.shape[0] == 1024 and w.shape[1] == 1024:
+                            # Square block-diagonal (Linear layers)
                             new_w[:1024, :1024] = w
                             new_w[1024:2048, 1024:2048] = w
-                        else:
-                            # 2D weight with other input (e.g. Speaker embedding)
+                        elif w.shape[1] == 1024:
+                            # Embedding-like (N, 1024)
+                            new_w[:, :1024] = w
+                            new_w[:, 1024:2048] = w
+                        elif w.shape[0] == 1024:
+                            # Projection-like (1024, N)
                             new_w[:1024, :] = w
                             new_w[1024:2048, :] = w
                         state_dict[key] = new_w
