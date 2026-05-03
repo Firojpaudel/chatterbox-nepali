@@ -29,7 +29,8 @@ from .models.t3.modules.cond_enc import T3Cond, T3CondEnc
 from .models.t3.modules.learned_pos_emb import LearnedPositionEmbeddings
 from .text_utils import punc_norm, SUPPORTED_LANGUAGES
 
-REPO_ID = "ResembleAI/chatterbox"
+REPO_ID = "Firoj112/chatterbox-nepali-runs"
+FALLBACK_REPO_ID = "ResembleAI/chatterbox"
 
 @dataclass
 class Conditionals:
@@ -174,9 +175,9 @@ class ChatterboxTTS:
         )
 
     @classmethod
-    def from_pretrained(cls,
-                        repo_id: str = REPO_ID,
-                        revision: str = "1b475dffa71fb191cb6d5901215eb6f55635a9b6",
+    def from_pretrained(cls, 
+                        repo_id: str = REPO_ID, 
+                        revision: Optional[str] = None, 
                         variant: str = "english",
                         *args, **kwargs) -> 'ChatterboxTTS':
         import os
@@ -192,13 +193,20 @@ class ChatterboxTTS:
 
         paths = {}
         for f in files:
-            paths[f] = hf_hub_download(repo_id=repo_id, filename=f, revision=revision)
+            try:
+                paths[f] = hf_hub_download(repo_id=repo_id, filename=f, revision=revision)
+            except Exception:
+                print(f"File {f} not found in {repo_id}, trying fallback {FALLBACK_REPO_ID}...")
+                paths[f] = hf_hub_download(repo_id=FALLBACK_REPO_ID, filename=f, revision="05e904af2b5c7f8e482687a9d7336c5c824467d9")
         
         # Attempt to download config.json
         try:
             config_repo_path = hf_hub_download(repo_id=repo_id, filename="config.json", revision=revision)
         except Exception:
-            config_repo_path = None
+            try:
+                config_repo_path = hf_hub_download(repo_id=FALLBACK_REPO_ID, filename="config.json", revision="05e904af2b5c7f8e482687a9d7336c5c824467d9")
+            except Exception:
+                config_repo_path = None
 
         # Create an isolated directory for vLLM so we don't corrupt the HF cache
         vllm_cache_dir = Path(os.path.expanduser(f"~/.cache/chatterbox_vllm_{variant}"))
@@ -249,7 +257,7 @@ class ChatterboxTTS:
 
     @classmethod
     def from_nepali(cls,
-                    model_repo_id: str = "Firoj112/chatterbox-nepali-runs",
+                    model_repo_id: str = REPO_ID,
                     model_filename: str = "t3_mtl_nepali_merged.safetensors",
                     base_repo_id: str = REPO_ID,
                     *args, **kwargs) -> 'ChatterboxTTS':
@@ -261,13 +269,24 @@ class ChatterboxTTS:
         base_files = ["ve.safetensors", "s3gen.safetensors", "conds.pt", "grapheme_mtl_merged_expanded_v1.json", "Cangjie5_TC.json"]
         base_paths = {}
         for f in base_files:
-            base_paths[f] = hf_hub_download(repo_id=base_repo_id, filename=f, revision="05e904af2b5c7f8e482687a9d7336c5c824467d9")
+            try:
+                # Try the unified repo first, then fallback
+                base_paths[f] = hf_hub_download(repo_id=base_repo_id, filename=f)
+            except Exception:
+                try:
+                    print(f"File {f} not found in {base_repo_id}, trying fallback {FALLBACK_REPO_ID}...")
+                    base_paths[f] = hf_hub_download(repo_id=FALLBACK_REPO_ID, filename=f, revision="05e904af2b5c7f8e482687a9d7336c5c824467d9")
+                except Exception as e:
+                    print(f"Warning: Could not download {f} from any repo: {e}")
 
-        # Attempt to download config.json, but don't fail if it's missing (we'll generate it)
+        # Attempt to download config.json (try unified repo first)
         try:
-            config_repo_path = hf_hub_download(repo_id=base_repo_id, filename="config.json", revision="05e904af2b5c7f8e482687a9d7336c5c824467d9")
+            config_repo_path = hf_hub_download(repo_id=base_repo_id, filename="config.json")
         except Exception:
-            config_repo_path = None
+            try:
+                config_repo_path = hf_hub_download(repo_id=FALLBACK_REPO_ID, filename="config.json", revision="05e904af2b5c7f8e482687a9d7336c5c824467d9")
+            except Exception:
+                config_repo_path = None
         
         # 2. Download Nepali weights
         nepali_path = hf_hub_download(repo_id=model_repo_id, filename=model_filename)
