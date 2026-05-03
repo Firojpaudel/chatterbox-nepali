@@ -360,14 +360,23 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 # because they are loaded via load_state_dict, not vLLM's load_weights.
                 for key in list(state_dict.keys()):
                     w = state_dict[key]
-                    # If weight is [N, 1024], expand it to [N, 2048]
-                    if w.dim() == 2 and w.shape[1] == 1024 and self.dim == 2048:
-                        print(f"DEBUG: Expanding custom component weight {attr}.{key} from {w.shape} to [N, 2048]")
-                        # For embeddings and heads, we cat them to ensure both streams use the same weights
-                        state_dict[key] = torch.cat([w, w], dim=1)
-                    # If bias is [1024], we cat it too
-                    elif w.dim() == 1 and w.shape[0] == 1024 and self.dim == 2048:
-                        state_dict[key] = torch.cat([w, w], dim=0)
+                    # Log all custom component shapes for debugging
+                    if getattr(self, '_log_weights_count', 0) < 20:
+                        print(f"DEBUG: Custom component {attr}.{key} checkpoint shape: {list(w.shape)}")
+                        self._log_weights_count = getattr(self, '_log_weights_count', 0) + 1
+
+                    # If either dimension is 1024, expand it to 2048
+                    if self.dim == 2048:
+                        if w.dim() == 2:
+                            if w.shape[1] == 1024:
+                                print(f"DEBUG: Expanding {attr}.{key} (dim 1) from 1024 to 2048")
+                                state_dict[key] = torch.cat([w, w], dim=1)
+                            elif w.shape[0] == 1024:
+                                print(f"DEBUG: Expanding {attr}.{key} (dim 0) from 1024 to 2048")
+                                state_dict[key] = torch.cat([w, w], dim=0)
+                        elif w.dim() == 1 and w.shape[0] == 1024:
+                            print(f"DEBUG: Expanding {attr}.{key} bias from 1024 to 2048")
+                            state_dict[key] = torch.cat([w, w], dim=0)
 
                 print(f"Loading vLLM weights: {attr} ({list(state_dict.keys())})")
                 getattr(self, attr).load_state_dict(state_dict, strict=False)
