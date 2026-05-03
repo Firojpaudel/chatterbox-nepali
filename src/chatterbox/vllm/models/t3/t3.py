@@ -279,11 +279,6 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 self.dim = self.weight.shape[0] // 2
             
             def forward(self, x, residual=None):
-                # DEBUG: Confirm this is being used
-                if getattr(self, '_print_once', True):
-                    print(f"DEBUG: BlockDiagonalRMSNorm.forward called! dim={self.dim}")
-                    self._print_once = False
-
                 if residual is not None:
                     x = x + residual
                     residual = x
@@ -293,6 +288,16 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 x1, x2 = x_fp32.split([self.dim, self.dim], dim=-1)
                 w1, w2 = self.weight.split([self.dim, self.dim], dim=-1)
                 
+                # DEBUG: Monitor stream isolation and stats
+                if getattr(self, '_log_count', 0) < 3:
+                    c_mean, c_std = x1.mean().item(), x1.std().item()
+                    u_mean, u_std = x2.mean().item(), x2.std().item()
+                    if torch.isnan(x1).any() or torch.isnan(x2).any():
+                        print(f"CRITICAL: NaN detected in RMSNorm input! Cond NaN: {torch.isnan(x1).any()}, Uncond NaN: {torch.isnan(x2).any()}")
+                    # Only print if they are significantly different or it's the first few layers
+                    print(f"DEBUG: RMSNorm Stream Stats - Cond: mean={c_mean:.4f}, std={c_std:.4f} | Uncond: mean={u_mean:.4f}, std={u_std:.4f}")
+                    self._log_count = getattr(self, '_log_count', 0) + 1
+
                 var1 = x1.pow(2).mean(-1, keepdim=True)
                 x1_norm = x1 * torch.rsqrt(var1 + self.variance_epsilon)
                 
@@ -500,32 +505,30 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         return output
 
 
-    def get_input_embeddings(
-        self,
-        input_ids: torch.Tensor,
-        multimodal_embeddings: Optional[MultiModalEmbeddings] = None,
-    ) -> torch.Tensor:
-        if multimodal_embeddings is None or len(multimodal_embeddings) == 0:
-            # There's no multimodal embeddings, so we're decoding.
-            # Remember to undo the offset we applied to the speech tokens.
-            # HACK: vLLM dummy runs pass token IDs of 0 for decode profiling, which results in negative indices.
-            speech_ids = torch.clamp(input_ids - SPEECH_TOKEN_OFFSET, min=0)
-            embeds = self.speech_emb(speech_ids)
-            
-            # Estimate the speech position. In vLLM, positions is the absolute index in the context.
-            # We add the learned speech positional embedding to match the original model's training distribution.
-            # Note: This is a heuristic as we don't know the exact text length here, but even a close 
-            # absolute position is better than zero/missing for the T3 architecture.
-            pos_indices = positions.clamp(0, self.t3conf.max_speech_tokens + 3)
-            embeds = embeds + self.precomputed_speech_pos_emb[pos_indices]
+    def get_input_embeddings(self, input_ids: torch.Tensor, multimodal_embeddings: list[MultiModalEmbeddings], positions: Optional[torch.Tensor] = None) -> torch.Tensor:
+        if input_ids is not None and (input_ids >= SPEECH_TOKEN_OFFSET).any():
+            if multimodal_embeddings is None or len(multimodal_embeddings) == 0:
+                # There's no multimodal embeddings, so we're decoding.
+                # Remember to undo the offset we applied to the speech tokens.
+                # HACK: vLLM dummy runs pass token IDs of 0 for decode profiling, which results in negative indices.
+                speech_ids = torch.clamp(input_ids - SPEECH_TOKEN_OFFSET, min=0)
+                embeds = self.speech_emb(speech_ids)
+                
+                # Estimate the speech position. In vLLM, positions is the absolute index in the context.
+                # We add the learned speech positional embedding to match the original model's training distribution.
+                # Note: This is a heuristic as we don't know the exact text length here, but even a close 
+                # absolute position is better than zero/missing for the T3 architecture.
+                pos_indices = positions.clamp(0, self.t3conf.max_speech_tokens + 3)
+                
+                # DEBUG: Log decode embeddings
+                if getattr(self, '_log_decode', 0) < 5:
+                    print(f"DEBUG: get_input_embeddings (Decode) - ids: {input_ids.tolist()}, pos: {pos_indices.tolist()}")
+                    self._log_decode = getattr(self, '_log_decode', 0) + 1
 
-            out = torch.cat([embeds, embeds], dim=1)
+                embeds = embeds + self.precomputed_speech_pos_emb[pos_indices]
 
-            # if len(out) != len(input_ids):
-            #     print("t3/get_input_embeddings/out", out.shape, out.dtype)
-            #     print("t3/get_input_embeddings/input_ids", input_ids.shape, input_ids.dtype)
-            # assert len(out) == len(input_ids), "Number of output elements does not match number of input elements"
-            return out
+                out = torch.cat([embeds, embeds], dim=1)
+                return out
         else:
             # print("t3/get_input_embeddings/multimodal_embeddings", len(multimodal_embeddings))
             # print("t3/get_input_embeddings/input_ids", input_ids.shape, input_ids.dtype, input_ids)
@@ -643,6 +646,11 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                         # Extract the position IDs for the text portion by counting the number of 1s (minus 1) in the multimodal embedding
                         # that was injected via our hack above.
                         text_pos = (torch.sum(multimodal_embedding[0:len(text_ids)], dim=1) - 1).long()
+                        
+                        # DEBUG: Log prefill text positions
+                        if getattr(self, '_log_prefill', True):
+                            print(f"DEBUG: get_input_embeddings (Prefill) - text_len: {len(text_ids)}, text_pos_range: {text_pos.min().item()}-{text_pos.max().item()}")
+                            self._log_prefill = False
 
                         text_emb = self.text_emb(text_ids) + self.precomputed_text_pos_emb[text_pos]
 
@@ -683,13 +691,24 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         if getattr(self, '_log_count', 0) < 5:
             c_mean, c_std = cond_hidden_states.mean().item(), cond_hidden_states.std().item()
             u_mean, u_std = uncond_hidden_states.mean().item(), uncond_hidden_states.std().item()
-            print(f"DEBUG: compute_logits - Cond: mean={c_mean:.4f}, std={c_std:.4f} | Uncond: mean={u_mean:.4f}, std={u_std:.4f}")
+            print(f"DEBUG: compute_logits - Cond Hidden: mean={c_mean:.4f}, std={c_std:.4f} | Uncond Hidden: mean={u_mean:.4f}, std={u_std:.4f}")
             self._log_count = getattr(self, '_log_count', 0) + 1
     
         cond_logits = self.logits_processor(self.speech_head, cond_hidden_states, sampling_metadata)
         uncond_logits = self.logits_processor(self.speech_head, uncond_hidden_states, sampling_metadata)
+
+        if getattr(self, '_log_logits', 0) < 5:
+            c_l_mean, c_l_std = cond_logits.mean().item(), cond_logits.std().item()
+            u_l_mean, u_l_std = uncond_logits.mean().item(), uncond_logits.std().item()
+            print(f"DEBUG: compute_logits - Cond Logits: mean={c_l_mean:.4f}, std={c_l_std:.4f} | Uncond Logits: mean={u_l_mean:.4f}, std={u_l_std:.4f}")
+            self._log_logits = getattr(self, '_log_logits', 0) + 1
     
         logits = cond_logits + self.cfg_scale * (cond_logits - uncond_logits)
+        
+        if getattr(self, '_log_final_logits', 0) < 5:
+             f_mean, f_std = logits.mean().item(), logits.std().item()
+             print(f"DEBUG: compute_logits - Final Combined Logits: mean={f_mean:.4f}, std={f_std:.4f}")
+             self._log_final_logits = getattr(self, '_log_final_logits', 0) + 1
     
         # HACK: Offset the logits so the resulting speech token is +SPEECH_TOKEN_OFFSET from the normal speech tokens.
         # Use -inf instead of zeros to ensure these padding tokens can never be selected
@@ -715,8 +734,10 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         # print("t3/input_ids", input_ids)
         # print("t3/kwargs", kwargs)
 
+        # If inputs_embeds is not provided (e.g. during dummy runs), we compute them ourselves
         if inputs_embeds is None:
-            inputs_embeds = self.get_input_embeddings(input_ids, [])
+            # We use an empty list for multimodal_embeddings as it's not used during decode
+            inputs_embeds = self.get_input_embeddings(input_ids, [], positions=positions)
 
         # inputs_embeds is ALREADY concatenated along the hidden_size dimension (dim=-1)
         # because get_input_embeddings does: torch.cat([cond_embeds, uncond_embeds], dim=1)
