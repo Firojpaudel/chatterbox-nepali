@@ -268,6 +268,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         dtype = self.speech_emb.weight.dtype
         if multimodal_embeddings is None or len(multimodal_embeddings) == 0:
             embeds = self.speech_emb(input_ids - SPEECH_TOKEN_OFFSET)
+            # Double along hidden dimension (dim=1) to keep token count (dim=0) aligned with positions
             return torch.cat([embeds, embeds], dim=1).contiguous()
         
         mm_casted = [mm.to(dtype) for mm in multimodal_embeddings]
@@ -333,24 +334,14 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             mm_data = self.get_multimodal_embeddings(**kwargs)
             inputs_embeds = self.get_input_embeddings(input_ids, mm_data)
 
-        cond_embeds, uncond_embeds = inputs_embeds.split([self.dim, self.dim], dim=1)
-        
-        # Invoke tfmr twice (Cond then Uncond) to bypass vLLM metadata batch-mismatch checks
-        # This is strictly safer for vLLM v0.9.2 than batch-doubling hacks
-        h_cond = self.tfmr(
+        # The core hack: Pass [N, 2048] embeddings with [N] positions.
+        # This keeps the token count (dim=0) aligned for rotary embeddings, 
+        # while the Llama backbone processes the doubled hidden dimension.
+        return self.tfmr(
             input_ids=None,
             positions=positions,
             intermediate_tensors=intermediate_tensors, 
-            inputs_embeds=cond_embeds.contiguous()
+            inputs_embeds=inputs_embeds.contiguous()
         )
-        
-        h_uncond = self.tfmr(
-            input_ids=None,
-            positions=positions,
-            intermediate_tensors=intermediate_tensors, 
-            inputs_embeds=uncond_embeds.contiguous()
-        )
-        
-        return torch.cat([h_cond, h_uncond], dim=1).contiguous()
 
     def get_language_model(self) -> torch.nn.Module: return self.tfmr
