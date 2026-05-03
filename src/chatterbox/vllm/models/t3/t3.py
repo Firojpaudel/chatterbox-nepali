@@ -729,9 +729,9 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         uncond_hidden_states = hidden_states[:, 1024:2048]
         
         # DEBUG: Log raw hidden states for exact comparison
-        if cond_hidden_states.numel() > 0:
-            diff = (cond_hidden_states - uncond_hidden_states).abs().max().item()
-            print(f"DEBUG: compute_logits - MAX STREAM DIFF: {diff:.8f}")
+        # if cond_hidden_states.numel() > 0:
+        #     diff = (cond_hidden_states - uncond_hidden_states).abs().max().item()
+        #     print(f"DEBUG: compute_logits - MAX STREAM DIFF: {diff:.8f}")
 
         # The speech_head expects a 4096-dim input (its weight shape is [8194, 4096])
         # To get independent logits, we zero-pad the "other" stream's slot.
@@ -745,30 +745,30 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         cond_logits = self.logits_processor(self.speech_head, cond_hidden_4096, sampling_metadata)
         uncond_logits = self.logits_processor(self.speech_head, uncond_hidden_4096, sampling_metadata)
 
-        if getattr(self, '_log_logits', 0) < 5:
-            c_l_mean, c_l_std = cond_logits.mean().item(), cond_logits.std().item()
-            u_l_mean, u_l_std = uncond_logits.mean().item(), uncond_logits.std().item()
-            print(f"DEBUG: compute_logits - Cond Logits: mean={c_l_mean:.4f}, std={c_l_std:.4f} | Uncond Logits: mean={u_l_mean:.4f}, std={u_l_std:.4f}")
-            self._log_logits = getattr(self, '_log_logits', 0) + 1
+        # if getattr(self, '_log_logits', 0) < 5:
+        #     c_l_mean, c_l_std = cond_logits.mean().item(), cond_logits.std().item()
+        #     u_l_mean, u_l_std = uncond_logits.mean().item(), uncond_logits.std().item()
+        #     print(f"DEBUG: compute_logits - Cond Logits: mean={c_l_mean:.4f}, std={c_l_std:.4f} | Uncond Logits: mean={u_l_mean:.4f}, std={u_l_std:.4f}")
+        #     self._log_logits = getattr(self, '_log_logits', 0) + 1
     
         # 4. Final Combination
         logits = cond_logits + self.cfg_scale * (cond_logits - uncond_logits)
 
         # DIAGNOSTIC: See what the model is actually predicting
-        if getattr(self, '_log_top_tokens', 0) < 5:
-            c_probs = torch.softmax(cond_logits[0], dim=-1)
-            u_probs = torch.softmax(uncond_logits[0], dim=-1)
-            f_probs = torch.softmax(logits[0], dim=-1)
-            
-            c_top_vals, c_top_ids = torch.topk(c_probs, 5)
-            u_top_vals, u_top_ids = torch.topk(u_probs, 5)
-            f_top_vals, f_top_ids = torch.topk(f_probs, 5)
-            
-            print(f"DEBUG: compute_logits TOP TOKENS:")
-            print(f"  Cond:   {[(tid.item(), f'{val.item():.4f}') for tid, val in zip(c_top_ids, c_top_vals)]}")
-            print(f"  Uncond: {[(tid.item(), f'{val.item():.4f}') for tid, val in zip(u_top_ids, u_top_vals)]}")
-            print(f"  Final:  {[(tid.item() + SPEECH_TOKEN_OFFSET, f'{val.item():.4f}') for tid, val in zip(f_top_ids, f_top_vals)]}")
-            self._log_top_tokens = getattr(self, '_log_top_tokens', 0) + 1
+        # if getattr(self, '_log_top_tokens', 0) < 5:
+        #     c_probs = torch.softmax(cond_logits[0], dim=-1)
+        #     u_probs = torch.softmax(uncond_logits[0], dim=-1)
+        #     f_probs = torch.softmax(logits[0], dim=-1)
+        #     
+        #     c_top_vals, c_top_ids = torch.topk(c_probs, 5)
+        #     u_top_vals, u_top_ids = torch.topk(u_probs, 5)
+        #     f_top_vals, f_top_ids = torch.topk(f_probs, 5)
+        #     
+        #     print(f"DEBUG: compute_logits TOP TOKENS:")
+        #     print(f"  Cond:   {[(tid.item(), f'{val.item():.4f}') for tid, val in zip(c_top_ids, c_top_vals)]}")
+        #     print(f"  Uncond: {[(tid.item(), f'{val.item():.4f}') for tid, val in zip(u_top_ids, u_top_vals)]}")
+        #     print(f"  Final:  {[(tid.item() + SPEECH_TOKEN_OFFSET, f'{val.item():.4f}') for tid, val in zip(f_top_ids, f_top_vals)]}")
+        #     self._log_top_tokens = getattr(self, '_log_top_tokens', 0) + 1
         
         # 5. Safety: Logit Masking
         # We MUST ensure the model only samples valid speech tokens (IDs 2560 to 2560+8192)
@@ -787,10 +787,10 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         logits.masked_fill_(mask, -float('inf'))
 
         # 6. Diagnostics
-        if getattr(self, '_log_final_logits', 0) < 5:
-             f_mean, f_std = logits.mean().item(), logits.std().item()
-             print(f"DEBUG: compute_logits - Final Combined Logits (Masked): mean={f_mean:.4f}, std={f_std:.4f}")
-             self._log_final_logits = getattr(self, '_log_final_logits', 0) + 1
+        # if getattr(self, '_log_final_logits', 0) < 5:
+        #      f_mean, f_std = logits.mean().item(), logits.std().item()
+        #      print(f"DEBUG: compute_logits - Final Combined Logits (Masked): mean={f_mean:.4f}, std={f_std:.4f}")
+        #      self._log_final_logits = getattr(self, '_log_final_logits', 0) + 1
     
         # 7. Offset the logits so the resulting speech token is +SPEECH_TOKEN_OFFSET 
         padding = torch.full((logits.shape[0], SPEECH_TOKEN_OFFSET), float('-inf'), 
