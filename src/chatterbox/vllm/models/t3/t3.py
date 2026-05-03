@@ -298,14 +298,14 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         state_dicts = {}
         hf_llama_weights = {}
         for name, weight in weights:
-            # Llama weights need to be passed through vllm's load_weights rather than load_state_dict
             if name.startswith("tfmr."):
                 subname = name[5:]
-                target_vocab = 32000
-                if weight.shape[0] < target_vocab:
-                    # Pad the weight matrix so it matches the larger logical vocab size expected by vLLM kernels
-                    padding = torch.zeros((target_vocab - weight.shape[0], weight.shape[1]), dtype=weight.dtype, device=weight.device)
-                    weight = torch.cat([weight, padding], dim=0)
+                if subname == "embed_tokens.weight":
+                    target_vocab = 32000
+                    if weight.shape[0] < target_vocab:
+                        # Pad the weight matrix so it matches the larger logical vocab size expected by vLLM kernels
+                        padding = torch.zeros((target_vocab - weight.shape[0], weight.shape[1]), dtype=weight.dtype, device=weight.device)
+                        weight = torch.cat([weight, padding], dim=0)
                 hf_llama_weights[subname] = weight
                 continue
             loaded_params.add(name)
