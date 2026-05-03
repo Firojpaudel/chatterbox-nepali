@@ -26,6 +26,18 @@ class T3Config:
         self.rope_theta = 10000.0
         self.max_position_embeddings = 1000
         
+        # Tokenizer dict sizes
+        self.text_tokens_dict_size = 256
+        self.speech_tokens_dict_size = 6561
+        
+        # Sequence lengths
+        self.max_text_tokens = 512
+        self.max_speech_tokens = 1024
+        
+        # Control tokens
+        self.start_speech_token = 0
+        self.stop_speech_token = 6561
+        
         # Conditioning Encoder required fields
         self.encoder_type = "voice_encoder"
         self.speaker_embed_size = 256
@@ -34,11 +46,15 @@ class T3Config:
         self.n_conditioning_tokens = 34
         self.conditioning_dim = 1024
         self.n_audio_tokens = 1
+        self.speech_cond_prompt_len = 32
         self.hf_config = None
 
     @classmethod
     def multilingual(cls):
-        return cls()
+        conf = cls()
+        # For multilingual model, some parameters might differ, but for now we keep them same
+        # as the weights expansion is handled in t3.py
+        return conf
 
     @classmethod
     def english_only(cls):
@@ -47,3 +63,4 @@ class T3Config:
     @property
     def is_multilingual(self) -> bool:
         return True
+
