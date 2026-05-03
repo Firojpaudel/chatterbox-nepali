@@ -703,6 +703,11 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         # because get_input_embeddings does: torch.cat([cond_embeds, uncond_embeds], dim=1)
         # where dim=1 is the hidden dimension. Thus, its shape is [seq_len, 2048].
         
+        # Remove multimodal-specific arguments before passing to the backbone transformer
+        # as LlamaModel.forward does not expect them.
+        kwargs.pop("conditionals", None)
+        kwargs.pop("multimodal_embeddings", None)
+
         # We process the 2048-dim embeddings through our expanded 2048-dim backbone natively!
         hidden_states = self.tfmr(
             input_ids=None,
