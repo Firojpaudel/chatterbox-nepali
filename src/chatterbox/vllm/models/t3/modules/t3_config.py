@@ -1,35 +1,38 @@
+from typing import Optional
+
+T3_CONFIG = {
+    "hidden_size": 2048,       # Expanded for block-diagonal CFG
+    "intermediate_size": 8192,
+    "num_attention_heads": 32, # Expanded from 16
+    "num_hidden_layers": 30,
+    "num_key_value_heads": 32, # Expanded from 16
+    "rms_norm_eps": 1e-05,
+    "vocab_size": 32000,
+    "rope_theta": 10000.0,
+    "max_position_embeddings": 1000,
+}
+
 class T3Config:
-    def __init__(self, text_tokens_dict_size=2455):
-        self.start_text_token = 255
-        self.stop_text_token = 0
-        self.text_tokens_dict_size = text_tokens_dict_size
-        self.max_text_tokens = 2048
-
-        self.start_speech_token = 6561
-        self.stop_speech_token = 6562
-        self.speech_tokens_dict_size = 8194
-        self.max_speech_tokens = 4096
-
-        self.llama_config_name = "Llama_520M"
-        self.input_pos_emb = "learned"
-        self.speech_cond_prompt_len = 150
-
-        self.encoder_type = "voice_encoder"
-        self.speaker_embed_size = 256
-        self.use_perceiver_resampler = True
-        self.emotion_adv = True
-        self.n_channels = 1024
-
-    @property
-    def is_multilingual(self):
-        return self.text_tokens_dict_size != 704
-
-    @classmethod
-    def english_only(cls):
-        """Create configuration for English-only TTS model."""
-        return cls(text_tokens_dict_size=704)
+    def __init__(self, **kwargs):
+        self.n_channels = kwargs.get("hidden_size", 2048)
+        self.intermediate_size = kwargs.get("intermediate_size", 4096)
+        self.n_heads = kwargs.get("num_attention_heads", 32)
+        self.n_layers = kwargs.get("num_hidden_layers", 30)
+        self.n_kv_heads = kwargs.get("num_key_value_heads", 32)
+        self.rms_norm_eps = kwargs.get("rms_norm_eps", 1e-05)
+        self.vocab_size = kwargs.get("vocab_size", 32000)
+        self.rope_theta = kwargs.get("rope_theta", 10000.0)
+        self.max_position_embeddings = kwargs.get("max_position_embeddings", 1000)
+        self.hf_config = None
 
     @classmethod
     def multilingual(cls):
-        """Create configuration for multilingual/Nepali TTS model."""
-        return cls(text_tokens_dict_size=2455)
+        return cls()
+
+    @classmethod
+    def english_only(cls):
+        return cls()
+
+    @property
+    def is_multilingual(self) -> bool:
+        return True

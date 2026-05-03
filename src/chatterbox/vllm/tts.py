@@ -105,29 +105,22 @@ MULTILINGUAL_VLLM_CONFIG = {
     "attn_implementation": "sdpa",
     "head_dim": 64,
     "hidden_act": "silu",
-    "hidden_size": 2048,       # Expanded for block-diagonal CFG
+    "hidden_size": 2048,
     "initializer_range": 0.02,
-    "intermediate_size": 8192, # Expanded from 4096
-    "max_position_embeddings": 131072,
+    "intermediate_size": 8192,
+    "max_position_embeddings": 1000,
     "mlp_bias": False,
     "model_type": "llama",
-    "num_attention_heads": 32, # Expanded from 16
+    "num_attention_heads": 32,
     "num_hidden_layers": 30,
-    "num_key_value_heads": 32, # Expanded from 16
+    "num_key_value_heads": 32,
     "pretraining_tp": 1,
     "rms_norm_eps": 1e-05,
-    "rope_scaling": {
-        "factor": 8.0,
-        "high_freq_factor": 4.0,
-        "low_freq_factor": 1.0,
-        "original_max_position_embeddings": 8192,
-        "rope_type": "llama3"
-    },
-    "rope_theta": 500000.0,
+    "rope_theta": 10000.0,
     "tie_word_embeddings": False,
-    "torch_dtype": "bfloat16",
+    "torch_dtype": "float16",
     "use_cache": True,
-    "vocab_size": 8
+    "vocab_size": 32000
 }
 
 

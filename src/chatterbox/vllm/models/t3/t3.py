@@ -374,6 +374,13 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     new_weight = torch.cat([weight, weight], dim=0)
                     yield subname, new_weight
                     del new_weight
+                elif "o_proj" in subname or "down_proj" in subname:
+                    # Block-diagonal expansion for output projections to maintain stream isolation
+                    new_weight = torch.zeros((weight.shape[0] * 2, weight.shape[1] * 2), dtype=weight.dtype, device=weight.device)
+                    new_weight[:weight.shape[0], :weight.shape[1]] = weight
+                    new_weight[weight.shape[0]:, weight.shape[1]:] = weight
+                    yield subname, new_weight
+                    del new_weight
                 elif "embed_tokens.weight" in subname:
                     new_weight = torch.cat([weight, weight], dim=1)
                     yield subname, new_weight
