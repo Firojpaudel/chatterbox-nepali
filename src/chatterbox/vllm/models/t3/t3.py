@@ -664,25 +664,16 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     cond_embeds = torch.cat([conditioning_emb, text_emb], dim=0)
                     uncond_embeds = torch.cat([conditioning_emb, torch.zeros_like(text_emb)], dim=0)
 
-                    # Concatenate into one giant tensor, which will be split in the forward pass
-                    final_embeds = torch.cat([cond_embeds, uncond_embeds], dim=1)
+                    # Interleave into 4096-dim space
+                    final_embeds = torch.zeros((len(cond_embeds), self.dim), dtype=cond_embeds.dtype, device=cond_embeds.device)
+                    final_embeds[:, 0:1024] = cond_embeds[:, 0:1024]
+                    final_embeds[:, 1024:2048] = uncond_embeds[:, 1024:2048]
                     assert len(final_embeds) == len(ids), "Number of output elements does not match number of input elements"
                     out.append(final_embeds)
                 elif ids[-1] == PREFILL_END_TOKEN:
                     # We have the end of the prefill block.
-                    # The only thing we an assume here is that we have the start of speech token,
-                    # and that our conditioning embeddings will at minimum be truncated. We can't
-                    # assume anything about the text portion.
-
-                    # Check if the end-of-conditioning token is present. If it is, we can assume that
-                    # we have the full text block. If it's not, we can assume that there's no conditioning
-                    # portion.
                     indices = torch.where(ids == PREFILL_COND_END_TOKEN)[0]
                     if len(indices) > 0:
-                        # print("t3/get_input_embeddings/end of prefill block, has conditioning")
-                        
-                        # We have the full text input, and it's from indices[0]+1 to the end of the input.
-                        # (indices[0] is the end of the conditioning)
                         text_ids = ids[indices[0]+1:-1]
                         text_emb = self.text_emb(text_ids) + self.precomputed_text_pos_emb[0:len(text_ids)]
                         
@@ -690,93 +681,60 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                         start_of_speech_emb = self.speech_emb(start_of_speech_token.unsqueeze(0))[0] + self.precomputed_speech_pos_emb[0:1]
 
                         conditioning_emb = multimodal_embedding[:indices[0]+1]
-                        
                         cond_embeds = torch.cat([conditioning_emb, text_emb, start_of_speech_emb], dim=0)
                         
-                        # Unconditional text stream needs positional embeddings, but token embeddings are zeroed!
                         uncond_text_emb = self.precomputed_text_pos_emb[0:len(text_ids)]
                         uncond_embeds = torch.cat([conditioning_emb, uncond_text_emb, start_of_speech_emb], dim=0)
 
-                        final_embeds = torch.cat([cond_embeds, uncond_embeds], dim=1)
-                        # assert len(final_embeds) == len(ids), "Number of output elements does not match number of input elements"
+                        final_embeds = torch.zeros((len(cond_embeds), self.dim), dtype=cond_embeds.dtype, device=cond_embeds.device)
+                        final_embeds[:, 0:1024] = cond_embeds[:, 0:1024]
+                        final_embeds[:, 1024:2048] = uncond_embeds[:, 1024:2048]
                         out.append(final_embeds)
                     else:
-                        # We don't have the conditioning portion, and we may only have part of the text portion.
-                        # print("t3/get_input_embeddings/end of prefill block, no conditioning")
-
-                        # conditioning_emb is the first 34 tokens of the sequence.
-                        conditioning_emb = multimodal_embedding # (34, 1024)
-                        
+                        conditioning_emb = multimodal_embedding # (34, 4096)
                         text_ids = ids[1:-1]
-                        
-                        # DEBUG: Log prefill text length
-                        if getattr(self, '_log_prefill', True):
-                            print(f"DEBUG: get_input_embeddings (Prefill) - text_len: {len(text_ids)}")
-                            self._log_prefill = False
-
-                        # Standard text embeddings + positional embeddings
                         text_emb = self.text_emb(text_ids) + self.precomputed_text_pos_emb[0:len(text_ids)]
-
+                        
                         start_of_speech_token = torch.tensor([self.t3conf.start_speech_token]).to(ids.device)
-                        # The first speech token (start of speech) is always at position 0 in the speech positional embeddings
                         start_of_speech_emb = self.speech_emb(start_of_speech_token.unsqueeze(0))[0]  + self.precomputed_speech_pos_emb[0:1]
                         
-                        # CORRECT ORDER: [Conditioning (34), Text (N), Start-of-Speech (1)]
                         cond_embeds = torch.cat([conditioning_emb, text_emb, start_of_speech_emb], dim=0)
-                        
-                        # DIAGNOSTIC TEST: Force the unconditional stream to be ZEROS (except start-of-speech)
-                        # This should make the uncond stream completely different.
-                        # If the output is still identical, the backbone is mixing them.
                         uncond_text_emb = torch.zeros_like(text_emb)
                         uncond_embeds = torch.cat([torch.zeros_like(conditioning_emb), uncond_text_emb, start_of_speech_emb], dim=0)
                         
-                        final_embeds = torch.cat([cond_embeds, uncond_embeds], dim=1)
-                        assert len(final_embeds) == len(ids), f"Length mismatch: {len(final_embeds)} vs {len(ids)}"
+                        final_embeds = torch.zeros((len(cond_embeds), self.dim), dtype=cond_embeds.dtype, device=cond_embeds.device)
+                        final_embeds[:, 0:1024] = cond_embeds[:, 0:1024]
+                        final_embeds[:, 1024:2048] = uncond_embeds[:, 1024:2048]
                         out.append(final_embeds)
 
                 else:
-                    # Something else - we don't know what to do with this.
-                    print("t3/get_input_embeddings/ERROR: prefill block contains neither start nor end. Please report this issue.")
-                    print("t3/get_input_embeddings/ids", ids.shape, ids.dtype, ids)
-                    print("t3/get_input_embeddings/multimodal_embedding", multimodal_embedding.shape if multimodal_embedding is not None else None)
                     raise ValueError(f"Unknown prefill block: {ids}")
 
             output = torch.cat(out, dim=0)
-
-            # if len(output) != len(input_ids):
-            #     print("t3/get_input_embeddings/output", output.shape, output.dtype)
-            #     print("t3/get_input_embeddings/input_ids", input_ids.shape, input_ids.dtype)
-            #     print("t3/get_input_embeddings/multimodal_embeddings", len(multimodal_embeddings))
             return output
 
-
     def compute_logits(self, hidden_states: torch.Tensor, sampling_metadata: SamplingMetadata) -> torch.Tensor:
-        # Split the hidden state vector into the three parts
-        cond_hidden_states, uncond_hidden_states = hidden_states.split([self.dim, self.dim], dim=1)
+        # Split the 4096-dim hidden states back into independent 1024-dim stream features
+        # We only care about the first two 1024-dim blocks.
+        cond_hidden_states = hidden_states[:, 0:1024]
+        uncond_hidden_states = hidden_states[:, 1024:2048]
         
         # DEBUG: Log raw hidden states for exact comparison
         if cond_hidden_states.numel() > 0:
             diff = (cond_hidden_states - uncond_hidden_states).abs().max().item()
             print(f"DEBUG: compute_logits - MAX STREAM DIFF: {diff:.8f}")
-            print(f"DEBUG: RAW Cond Hidden[0, :5]: {cond_hidden_states[0, :5].detach().cpu().tolist()}")
-            print(f"DEBUG: RAW Uncond Hidden[0, :5]: {uncond_hidden_states[0, :5].detach().cpu().tolist()}")
 
-        # DIAGNOSTIC LOGGING
-        if getattr(self, '_log_count', 0) < 5:
-            c_mean, c_std = cond_hidden_states.mean().item(), cond_hidden_states.std().item()
-            u_mean, u_std = uncond_hidden_states.mean().item(), uncond_hidden_states.std().item()
-            print(f"DEBUG: compute_logits - Cond Hidden: mean={c_mean:.4f}, std={c_std:.4f} | Uncond Hidden: mean={u_mean:.4f}, std={u_std:.4f}")
-            self._log_count = getattr(self, '_log_count', 0) + 1
-    
-        # Standard vLLM LogitsProcessor expect hidden states that match the model's dim (2048).
-        # To get independent logits from our 1024-dim streams using the cat-expanded 2048-dim head:
-        # y = [x1, 0] @ [w, w]^T = x1 @ w^T + 0 @ w^T = x1 @ w^T
-        zero_pad = torch.zeros_like(cond_hidden_states)
-        cond_hidden_2048 = torch.cat([cond_hidden_states, zero_pad], dim=1)
-        uncond_hidden_2048 = torch.cat([zero_pad, uncond_hidden_states], dim=1)
+        # The speech_head expects a 4096-dim input (its weight shape is [8194, 4096])
+        # To get independent logits, we zero-pad the "other" stream's slot.
+        zero_pad = torch.zeros((hidden_states.shape[0], self.dim - 1024), dtype=hidden_states.dtype, device=hidden_states.device)
         
-        cond_logits = self.logits_processor(self.speech_head, cond_hidden_2048, sampling_metadata)
-        uncond_logits = self.logits_processor(self.speech_head, uncond_hidden_2048, sampling_metadata)
+        cond_hidden_4096 = torch.cat([cond_hidden_states, zero_pad], dim=1)
+        # For uncond, we want it in the second slot [1024:2048]
+        uncond_hidden_4096 = torch.zeros_like(cond_hidden_4096)
+        uncond_hidden_4096[:, 1024:2048] = uncond_hidden_states
+        
+        cond_logits = self.logits_processor(self.speech_head, cond_hidden_4096, sampling_metadata)
+        uncond_logits = self.logits_processor(self.speech_head, uncond_hidden_4096, sampling_metadata)
 
         if getattr(self, '_log_logits', 0) < 5:
             c_l_mean, c_l_std = cond_logits.mean().item(), cond_logits.std().item()
