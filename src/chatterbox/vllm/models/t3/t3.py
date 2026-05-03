@@ -159,8 +159,13 @@ class T3MultiModalProcessor(BaseMultiModalProcessor[T3ProcessingInfo]):
 class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str):
         super().__init__()
-        # TRICK: Force 2048 hidden size for CFG lane stability
-        vllm_config.model_config.hf_config.hidden_size = 2048
+        # ARCHITECTURAL LANE DOUBLING (2x 1024 = 2048)
+        # We must also double the intermediate size for consistent MLP behavior.
+        orig_hidden = vllm_config.model_config.hf_config.hidden_size
+        vllm_config.model_config.hf_config.hidden_size = orig_hidden * 2
+        if hasattr(vllm_config.model_config.hf_config, "intermediate_size"):
+            vllm_config.model_config.hf_config.intermediate_size *= 2
+            
         self.vllm_config = vllm_config
         self.cfg: ModelConfig = vllm_config.model_config
 
@@ -196,7 +201,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             if "tfmr." in name:
                 subname = name[name.find("tfmr.")+5:]
                 
-                # Expand weights to 2048 dimensions using block-diagonal replication
+                # Expand weights to match the doubled config (2x 1024 = 2048)
                 if "qkv_proj.weight" in subname:
                     q, k, v = weight.chunk(3, dim=0)
                     new_q = torch.block_diag(q, q)
@@ -206,7 +211,6 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 elif any(x in subname for x in ["o_proj.weight", "gate_proj.weight", "up_proj.weight", "down_proj.weight"]):
                     weight = torch.block_diag(weight, weight)
                 elif "embed_tokens.weight" in subname:
-                    # CRITICAL: RESTORE VOCAB PADDING TO 32000
                     if weight.shape[0] < 32000:
                         padding = torch.zeros((32000 - weight.shape[0], weight.shape[1]), dtype=weight.dtype, device=weight.device)
                         weight = torch.cat([weight, padding], dim=0)
