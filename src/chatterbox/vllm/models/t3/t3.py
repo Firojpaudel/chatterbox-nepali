@@ -676,9 +676,13 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         # This prevents "leaking" into text tokens which would cause garbage audio.
         mask = torch.ones_like(logits, dtype=torch.bool)
         # 8192 is the number of speech tokens. 
-        # We also allow the stop token (8194 relative to our speech_head)
-        mask[:, :8192] = False 
-        mask[:, 8194] = False # Allow STOP token
+        # We also allow the stop token (8194 relative to our speech_head) if it exists in the tensor.
+        mask[:, :min(8192, logits.shape[1])] = False 
+        if logits.shape[1] > 8194:
+            mask[:, 8194] = False
+        else:
+            # If the head is smaller than 8195, allow the last few tokens as a fallback for STOP
+            mask[:, -2:] = False 
         
         logits.masked_fill_(mask, -float('inf'))
 
