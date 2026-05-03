@@ -592,11 +592,11 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                         text_emb = self.text_emb(text_ids) + self.precomputed_text_pos_emb[pos_indices]
                         
                         cond_embeds = text_emb
-                        uncond_embeds = torch.zeros_like(text_emb)
+                        uncond_embeds = self.precomputed_text_pos_emb[pos_indices]
                         
                         final_embeds = torch.zeros((len(cond_embeds), self.dim), dtype=cond_embeds.dtype, device=cond_embeds.device)
                         final_embeds[:, 0:1024] = cond_embeds[:, 0:1024]
-                        final_embeds[:, 1024:2048] = uncond_embeds[:, 1024:2048]
+                        final_embeds[:, 1024:2048] = uncond_embeds[:, 0:1024]
                         out.append(final_embeds)
                         continue
                     else:
