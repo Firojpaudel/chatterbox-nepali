@@ -302,10 +302,10 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 return out
 
         # Apply the patch to all layers and the final output norm
-        for layer in self.tfmr.model.layers:
+        for layer in self.tfmr.layers:
             layer.input_layernorm = BlockDiagonalRMSNorm(layer.input_layernorm)
             layer.post_attention_layernorm = BlockDiagonalRMSNorm(layer.post_attention_layernorm)
-        self.tfmr.model.norm = BlockDiagonalRMSNorm(self.tfmr.model.norm)
+        self.tfmr.norm = BlockDiagonalRMSNorm(self.tfmr.norm)
 
         self.cfg_scale = self.vllm_config.model_config.hf_config.cfg_scale
 
