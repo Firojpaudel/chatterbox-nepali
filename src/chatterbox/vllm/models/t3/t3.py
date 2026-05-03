@@ -160,10 +160,12 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str):
         super().__init__()
         # ARCHITECTURAL LANE DOUBLING (1024 -> 2048)
-        # We must double EVERYTHING related to heads and hidden dimensions 
-        # to ensure the Lane architecture is perfectly consistent across all kernels.
+        # We must synchronize BOTH the high-level ModelConfig and the hf_config
+        # to ensure vLLM allocates the correct tensor sizes on the GPU.
         hf = vllm_config.model_config.hf_config
         hf.hidden_size *= 2
+        vllm_config.model_config.hidden_size = hf.hidden_size
+        
         if hasattr(hf, "intermediate_size"):
             hf.intermediate_size *= 2
         if hasattr(hf, "num_attention_heads"):
