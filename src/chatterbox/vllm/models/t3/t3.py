@@ -262,10 +262,18 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     x = x + residual
                     residual = x
                 
+                # Dynamic dim based on weight
+                current_dim = self.weight.shape[0] // 2
+                
                 # Cast to float32 for precision, split into the two streams
                 x_fp32 = x.to(torch.float32)
-                x1, x2 = x_fp32.split([self.dim, self.dim], dim=-1)
-                w1, w2 = self.weight.split([self.dim, self.dim], dim=-1)
+                
+                # DEBUG: Monitor shapes if there's a mismatch
+                if x_fp32.shape[-1] != current_dim * 2:
+                    print(f"CRITICAL: RMSNorm shape mismatch! x: {list(x_fp32.shape)}, weight: {list(self.weight.shape)}, current_dim: {current_dim}")
+                
+                x1, x2 = x_fp32.split([current_dim, current_dim], dim=-1)
+                w1, w2 = self.weight.split([current_dim, current_dim], dim=-1)
                 
                 # DEBUG: Monitor stream isolation and stats
                 if getattr(self, '_log_count', 0) < 3:
