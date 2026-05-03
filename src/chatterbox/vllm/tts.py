@@ -46,7 +46,10 @@ class ChatterboxT3Config(LlamaConfig):
 
 AutoConfig.register("ChatterboxT3", ChatterboxT3Config)
 
-from vllm import LLM, SamplingParams
+from vllm import LLM, SamplingParams, ModelRegistry
+from .models.t3 import T3VllmModel
+ModelRegistry.register_model("T3VllmModel", T3VllmModel)
+
 from functools import lru_cache
 
 import librosa
