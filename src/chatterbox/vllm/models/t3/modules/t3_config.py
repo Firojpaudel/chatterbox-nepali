@@ -14,9 +14,9 @@ T3_CONFIG = {
 
 class T3Config:
     def __init__(self, **kwargs):
-        # Native T3 dimension is 1024. 
-        # We use 4096 channels because vLLM stubbornlly defaults to 128-dim heads (32*128=4096)
-        self.n_channels = 4096
+        # vLLM requires hidden_size to be a multiple of num_heads.
+        # With 32 heads, 2048 (64/head) is the smallest power-of-two that fits our two 1024-dim streams.
+        self.n_channels = 2048
         self.intermediate_size = 8192
         self.n_heads = 32
         self.n_layers = 30
@@ -46,7 +46,7 @@ class T3Config:
         self.emotion_adv = True
         self.use_perceiver_resampler = True
         self.n_conditioning_tokens = 34
-        self.conditioning_dim = 2048
+        self.conditioning_dim = 1024 # Latent dimension remains 1024
         self.n_audio_tokens = 1
         self.speech_cond_prompt_len = 32
         self.hf_config = None
