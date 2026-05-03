@@ -390,7 +390,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                                               dtype=expanded_weight.dtype)
                     final_weight[:expanded_weight.shape[0]] = expanded_weight
                     yield subname, final_weight
-                    del new_weight
+                    del final_weight, expanded_weight
                 else:
                     yield subname, weight
                 
