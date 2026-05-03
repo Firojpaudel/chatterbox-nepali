@@ -133,16 +133,14 @@ def get_or_load_model(use_vllm=False):
         
         # Identify available checkpoints but DON'T load them yet
         for name, filename in CHECKPOINTS.items():
-            if not os.path.exists(filename):
-                try:
-                    hf_hub_download(repo_id=REPO_ID, filename=filename, local_dir=".")
-                except Exception as e:
-                    print(f"Could not download {filename}: {e}")
-                    continue
-            
-            if os.path.exists(filename):
-                FINETUNE_FILES[name] = filename
-                print(f"Registered checkpoint: {name} ({filename})")
+            try:
+                # Use standard HF cache to avoid double downloads
+                path = hf_hub_download(repo_id=REPO_ID, filename=filename)
+                FINETUNE_FILES[name] = path
+                print(f"Registered checkpoint: {name}")
+            except Exception as e:
+                print(f"Could not download {filename}: {e}")
+                continue
 
         # Load the default model (nepali-final) on demand
         if "nepali-final" in FINETUNE_FILES:
