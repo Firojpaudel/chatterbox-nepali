@@ -159,16 +159,48 @@ class ChatterboxTTS:
     @classmethod
     def _load_cond_components(cls, t3_weights: dict, t3_config: T3Config, target_device: str):
         """Load conditioning encoder, speech embedding, and speech position embedding from weights."""
+        
+        def expand_weights(weights_dict, target_dim=2048):
+            expanded = {}
+            for k, v in weights_dict.items():
+                # 2D weights: [N, 1024] or [1024, N]
+                if v.dim() == 2:
+                    if v.shape[1] == 1024:
+                        v = torch.cat([v, v], dim=1)
+                    elif v.shape[0] == 1024:
+                        v = torch.cat([v, v], dim=0)
+                # 3D weights: [1, 32, 1024]
+                elif v.dim() == 3 and v.shape[2] == 1024:
+                    v = torch.cat([v, v], dim=2)
+                # 1D weights: [1024] (biases/norms)
+                elif v.dim() == 1 and v.shape[0] == 1024:
+                    v = torch.cat([v, v], dim=0)
+                expanded[k] = v
+            return expanded
+
         t3_enc = T3CondEnc(t3_config)
-        t3_enc.load_state_dict({k.replace('cond_enc.', ''): v for k, v in t3_weights.items() if k.startswith('cond_enc.')})
+        enc_weights = {k.replace('cond_enc.', ''): v for k, v in t3_weights.items() if k.startswith('cond_enc.')}
+        print(f"DEBUG: _load_cond_components - n_channels: {t3_config.n_channels}, target_device: {target_device}")
+        if t3_config.n_channels == 2048:
+            enc_weights = expand_weights(enc_weights)
+            # Print a few shapes to verify expansion
+            for k in list(enc_weights.keys())[:3]:
+                print(f"DEBUG: Expanded {k} shape: {list(enc_weights[k].shape)}")
+        t3_enc.load_state_dict(enc_weights)
         t3_enc = t3_enc.to(device=target_device).eval()
 
         t3_speech_emb = torch.nn.Embedding(t3_config.speech_tokens_dict_size, t3_config.n_channels)
-        t3_speech_emb.load_state_dict({k.replace('speech_emb.', ''): v for k, v in t3_weights.items() if k.startswith('speech_emb.')})
+        emb_weights = {k.replace('speech_emb.', ''): v for k, v in t3_weights.items() if k.startswith('speech_emb.')}
+        if t3_config.n_channels == 2048:
+            emb_weights = expand_weights(emb_weights)
+        t3_speech_emb.load_state_dict(emb_weights)
         t3_speech_emb = t3_speech_emb.to(device=target_device).eval()
 
         t3_speech_pos_emb = LearnedPositionEmbeddings(t3_config.max_speech_tokens + 2 + 2, t3_config.n_channels)
-        t3_speech_pos_emb.load_state_dict({k.replace('speech_pos_emb.', ''): v for k, v in t3_weights.items() if k.startswith('speech_pos_emb.')})
+        pos_weights = {k.replace('speech_pos_emb.', ''): v for k, v in t3_weights.items() if k.startswith('speech_pos_emb.')}
+        if t3_config.n_channels == 2048:
+            pos_weights = expand_weights(pos_weights)
+        t3_speech_pos_emb.load_state_dict(pos_weights)
         t3_speech_pos_emb = t3_speech_pos_emb.to(device=target_device).eval()
 
         return t3_enc, t3_speech_emb, t3_speech_pos_emb
