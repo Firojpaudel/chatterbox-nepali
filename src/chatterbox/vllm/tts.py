@@ -12,7 +12,10 @@ AutoConfig.register = _new_register
 
 # Register ChatterboxT3 architecture so transformers recognizes it
 from transformers import LlamaConfig
-AutoConfig.register("ChatterboxT3", LlamaConfig)
+class ChatterboxT3Config(LlamaConfig):
+    model_type = "ChatterboxT3"
+
+AutoConfig.register("ChatterboxT3", ChatterboxT3Config)
 
 from vllm import LLM, SamplingParams
 from functools import lru_cache
