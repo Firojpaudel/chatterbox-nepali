@@ -10,6 +10,10 @@ def _new_register(model_type, config, exist_ok=False):
     return _original_register(model_type, config, exist_ok=True)
 AutoConfig.register = _new_register
 
+# Register ChatterboxT3 architecture so transformers recognizes it
+from transformers import LlamaConfig
+AutoConfig.register("ChatterboxT3", LlamaConfig)
+
 from vllm import LLM, SamplingParams
 from functools import lru_cache
 
@@ -151,6 +155,7 @@ class ChatterboxTTS:
             "gpu_memory_utilization": min(vllm_memory_percent, 0.9),
             "enforce_eager": not compile,
             "max_model_len": max_model_len,
+            "trust_remote_code": True,
         }
 
         t3 = LLM(**{**base_vllm_kwargs, **kwargs})
