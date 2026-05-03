@@ -124,7 +124,7 @@ MULTILINGUAL_VLLM_CONFIG = {
         "factor": 8.0,
         "high_freq_factor": 4.0,
         "low_freq_factor": 1.0,
-        "original_max_position_embeddings": 8192,
+        "original_max_position_embeddings": 8191,
         "rope_type": "llama3"
     },
     "tie_word_embeddings": False,
