@@ -27,8 +27,8 @@ class T3Config:
         self.max_position_embeddings = 1000
         
         # Tokenizer dict sizes
-        self.text_tokens_dict_size = 256
-        self.speech_tokens_dict_size = 6561
+        self.text_tokens_dict_size = 1024
+        self.speech_tokens_dict_size = 8194
         
         # Sequence lengths
         self.max_text_tokens = 512
@@ -36,7 +36,8 @@ class T3Config:
         
         # Control tokens
         self.start_speech_token = 0
-        self.stop_speech_token = 6561
+        self.stop_speech_token = 8194
+
         
         # Conditioning Encoder required fields
         self.encoder_type = "voice_encoder"
