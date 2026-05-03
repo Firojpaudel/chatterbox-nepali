@@ -279,6 +279,11 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 self.dim = self.weight.shape[0] // 2
             
             def forward(self, x, residual=None):
+                # DEBUG: Confirm this is being used
+                if getattr(self, '_print_once', True):
+                    print(f"DEBUG: BlockDiagonalRMSNorm.forward called! dim={self.dim}")
+                    self._print_once = False
+
                 if residual is not None:
                     x = x + residual
                     residual = x
@@ -506,6 +511,13 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             # HACK: vLLM dummy runs pass token IDs of 0 for decode profiling, which results in negative indices.
             speech_ids = torch.clamp(input_ids - SPEECH_TOKEN_OFFSET, min=0)
             embeds = self.speech_emb(speech_ids)
+            
+            # Estimate the speech position. In vLLM, positions is the absolute index in the context.
+            # We add the learned speech positional embedding to match the original model's training distribution.
+            # Note: This is a heuristic as we don't know the exact text length here, but even a close 
+            # absolute position is better than zero/missing for the T3 architecture.
+            pos_indices = positions.clamp(0, self.t3conf.max_speech_tokens + 3)
+            embeds = embeds + self.precomputed_speech_pos_emb[pos_indices]
 
             out = torch.cat([embeds, embeds], dim=1)
 
@@ -666,6 +678,13 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
     def compute_logits(self, hidden_states: torch.Tensor, sampling_metadata: SamplingMetadata) -> torch.Tensor:
         # Split the hidden state vector into the three parts
         cond_hidden_states, uncond_hidden_states = hidden_states.split([self.dim, self.dim], dim=1)
+
+        # DIAGNOSTIC LOGGING
+        if getattr(self, '_log_count', 0) < 5:
+            c_mean, c_std = cond_hidden_states.mean().item(), cond_hidden_states.std().item()
+            u_mean, u_std = uncond_hidden_states.mean().item(), uncond_hidden_states.std().item()
+            print(f"DEBUG: compute_logits - Cond: mean={c_mean:.4f}, std={c_std:.4f} | Uncond: mean={u_mean:.4f}, std={u_std:.4f}")
+            self._log_count = getattr(self, '_log_count', 0) + 1
     
         cond_logits = self.logits_processor(self.speech_head, cond_hidden_states, sampling_metadata)
         uncond_logits = self.logits_processor(self.speech_head, uncond_hidden_states, sampling_metadata)
