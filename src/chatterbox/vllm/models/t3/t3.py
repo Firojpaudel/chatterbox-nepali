@@ -268,16 +268,17 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         dtype = self.speech_emb.weight.dtype
         if multimodal_embeddings is None or len(multimodal_embeddings) == 0:
             embeds = self.speech_emb(input_ids - SPEECH_TOKEN_OFFSET)
-            # Double along hidden dimension (dim=1) to keep token count (dim=0) aligned with positions
-            return torch.cat([embeds, embeds], dim=1).contiguous()
+            return torch.cat([embeds, embeds], dim=0).contiguous()
         
         mm_casted = [mm.to(dtype) for mm in multimodal_embeddings]
             
-        out = []
+        out_cond = []
+        out_uncond = []
         for ids, mme in self.split_prefill_decode(input_ids, mm_casted):
             if mme is None:
                 embeds = self.speech_emb(ids - SPEECH_TOKEN_OFFSET)
-                out.append(torch.cat([embeds, embeds], dim=1))
+                out_cond.append(embeds)
+                out_uncond.append(embeds)
                 continue
             
             if ids[0] == PREFILL_COND_START_TOKEN and ids[-1] == PREFILL_END_TOKEN:
@@ -286,16 +287,14 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 start_of_speech_token = torch.tensor([self.t3conf.start_speech_token], device=ids.device)
                 start_of_speech_emb = self.speech_emb(start_of_speech_token.unsqueeze(0))[0] + self.precomputed_speech_pos_emb[0:1].to(ids.device)
                 conditioning_emb = mme[0:CONDITIONING_SIZE]
-                cond_embeds = torch.cat([conditioning_emb, text_emb, start_of_speech_emb], dim=0)
-                uncond_embeds = torch.cat([conditioning_emb, torch.zeros_like(text_emb), start_of_speech_emb], dim=0)
-                out.append(torch.cat([cond_embeds, uncond_embeds], dim=1))
+                out_cond.append(torch.cat([conditioning_emb, text_emb, start_of_speech_emb], dim=0))
+                out_uncond.append(torch.cat([conditioning_emb, torch.zeros_like(text_emb), start_of_speech_emb], dim=0))
             elif ids[0] == PREFILL_COND_START_TOKEN:
                 text_ids = ids[CONDITIONING_SIZE:]
                 text_emb = self.text_emb(text_ids) + self.precomputed_text_pos_emb[0:len(text_ids)].to(ids.device)
                 conditioning_emb = mme[0:min(CONDITIONING_SIZE, len(mme))]
-                cond_embeds = torch.cat([conditioning_emb, text_emb], dim=0)
-                uncond_embeds = torch.cat([conditioning_emb, torch.zeros_like(text_emb)], dim=0)
-                out.append(torch.cat([cond_embeds, uncond_embeds], dim=1))
+                out_cond.append(torch.cat([conditioning_emb, text_emb], dim=0))
+                out_uncond.append(torch.cat([conditioning_emb, torch.zeros_like(text_emb)], dim=0))
             elif ids[-1] == PREFILL_END_TOKEN:
                 indices = torch.where(ids == PREFILL_COND_END_TOKEN)[0]
                 if len(indices) > 0:
@@ -304,26 +303,28 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     start_of_speech_token = torch.tensor([self.t3conf.start_speech_token], device=ids.device)
                     start_of_speech_emb = self.speech_emb(start_of_speech_token.unsqueeze(0))[0] + self.precomputed_speech_pos_emb[0:1].to(ids.device)
                     conditioning_emb = mme[:indices[0]+1]
-                    cond_embeds = torch.cat([conditioning_emb, text_emb, start_of_speech_emb], dim=0)
-                    uncond_embeds = torch.cat([conditioning_emb, torch.zeros_like(text_emb), start_of_speech_emb], dim=0)
-                    out.append(torch.cat([cond_embeds, uncond_embeds], dim=1))
+                    out_cond.append(torch.cat([conditioning_emb, text_emb, start_of_speech_emb], dim=0))
+                    out_uncond.append(torch.cat([conditioning_emb, torch.zeros_like(text_emb), start_of_speech_emb], dim=0))
                 else:
                     text_ids = ids[:-1]
                     text_pos = torch.sum(mme[0:len(text_ids)], dim=1).long() - 1
                     text_emb = self.text_emb(text_ids) + self.precomputed_text_pos_emb[text_pos].to(ids.device)
                     start_of_speech_token = torch.tensor([self.t3conf.start_speech_token], device=ids.device)
                     start_of_speech_emb = self.speech_emb(start_of_speech_token.unsqueeze(0))[0] + self.precomputed_speech_pos_emb[0:1].to(ids.device)
-                    cond_embeds = torch.cat([text_emb, start_of_speech_emb], dim=0)
-                    uncond_embeds = torch.cat([torch.zeros_like(text_emb), start_of_speech_emb], dim=0)
-                    out.append(torch.cat([cond_embeds, uncond_embeds], dim=1))
+                    out_cond.append(torch.cat([text_emb, start_of_speech_emb], dim=0))
+                    out_uncond.append(torch.cat([torch.zeros_like(text_emb), start_of_speech_emb], dim=0))
             else:
-                out.append(torch.zeros(len(ids), self.dim * 2, dtype=dtype, device=ids.device))
-        return torch.cat(out, dim=0).contiguous()
+                padding = torch.zeros(len(ids), self.dim, dtype=dtype, device=ids.device)
+                out_cond.append(padding)
+                out_uncond.append(padding)
+        
+        return torch.cat([torch.cat(out_cond, dim=0), torch.cat(out_uncond, dim=0)], dim=0).contiguous()
 
     def compute_logits(self, hidden_states: torch.Tensor, sampling_metadata: SamplingMetadata) -> torch.Tensor:
-        cond_hs, uncond_hs = hidden_states.split([self.dim, self.dim], dim=1)
-        cond_logits = self.logits_processor(self.speech_head, cond_hs, sampling_metadata)
-        uncond_logits = self.logits_processor(self.speech_head, uncond_hs, sampling_metadata)
+        # Split back to Cond and Uncond
+        h_cond, h_uncond = hidden_states.chunk(2, dim=0)
+        cond_logits = self.logits_processor(self.speech_head, h_cond, sampling_metadata)
+        uncond_logits = self.logits_processor(self.speech_head, h_uncond, sampling_metadata)
         logits = cond_logits + self.cfg_scale * (cond_logits - uncond_logits)
         padding = torch.full((logits.shape[0], SPEECH_TOKEN_OFFSET), float('-inf'), dtype=logits.dtype, device=logits.device)
         return torch.cat([padding, logits], dim=1)
@@ -334,14 +335,15 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             mm_data = self.get_multimodal_embeddings(**kwargs)
             inputs_embeds = self.get_input_embeddings(input_ids, mm_data)
 
-        # The core hack: Pass [N, 2048] embeddings with [N] positions.
-        # This keeps the token count (dim=0) aligned for rotary embeddings, 
-        # while the Llama backbone processes the doubled hidden dimension.
+        # Doubling the batch length (dim=0) and doubling positions
+        # This is the "True" hack. We MUST double positions as int64.
+        doubled_positions = torch.cat([positions, positions], dim=0).long().contiguous()
+
         return self.tfmr(
             input_ids=None,
-            positions=positions,
+            positions=doubled_positions,
             intermediate_tensors=intermediate_tensors, 
-            inputs_embeds=inputs_embeds.contiguous()
+            inputs_embeds=inputs_embeds
         )
 
     def get_language_model(self) -> torch.nn.Module: return self.tfmr
