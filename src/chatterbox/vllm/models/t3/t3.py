@@ -261,7 +261,11 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         # We will dynamically expand the 1024-dim weights to 2048-dim block-diagonal
         # matrices in load_weights. This allows the 32 heads to process the cond
         # and uncond sequences independently in a single native vLLM engine pass!
-        self.tfmr = get_model(vllm_config=vllm_config)
+        self.vllm_config = vllm_config
+        self.cfg: ModelConfig = vllm_config.model_config
+
+        # Initialize LLaMA backbone
+        self.tfmr = LlamaModel(vllm_config=vllm_config, prefix=prefix + ".tfmr")
 
         # Hot-patch vLLM's RMSNorm to prevent channel mixing!
         # Standard RMSNorm computes the mean across the full 2048 dimension, which breaks our
@@ -304,9 +308,6 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         self.tfmr.model.norm = BlockDiagonalRMSNorm(self.tfmr.model.norm)
 
         self.cfg_scale = self.vllm_config.model_config.hf_config.cfg_scale
-
-        # Initialize LLaMA backbone
-        self.tfmr = LlamaModel(vllm_config=vllm_config, prefix=prefix + ".tfmr")
 
         # Initialize custom components
         is_multilingual = getattr(self.cfg.hf_config, 'is_multilingual', False)
