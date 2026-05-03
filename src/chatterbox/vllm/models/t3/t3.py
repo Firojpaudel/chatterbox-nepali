@@ -327,19 +327,29 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
         # Use a generator to expand weights just-in-time to prevent System RAM OOM kills
         def generate_expanded_llama_weights():
-            for subname, weight in hf_llama_weights.items():
+            # Pop items from the dictionary to aggressively free System RAM during iteration!
+            while hf_llama_weights:
+                subname, weight = hf_llama_weights.popitem()
                 if any(x in subname for x in ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj", "mlp.gate_proj", "mlp.up_proj", "mlp.down_proj"]):
                     dim0, dim1 = weight.shape
                     new_weight = torch.zeros((dim0 * 2, dim1 * 2), dtype=weight.dtype, device=weight.device)
                     new_weight[:dim0, :dim1] = weight
                     new_weight[dim0:, dim1:] = weight
                     yield subname, new_weight
+                    del new_weight
                 elif any(x in subname for x in ["input_layernorm.weight", "post_attention_layernorm.weight", "norm.weight", "norm.bias"]):
-                    yield subname, torch.cat([weight, weight], dim=0)
+                    new_weight = torch.cat([weight, weight], dim=0)
+                    yield subname, new_weight
+                    del new_weight
                 elif "embed_tokens.weight" in subname:
-                    yield subname, torch.cat([weight, weight], dim=1)
+                    new_weight = torch.cat([weight, weight], dim=1)
+                    yield subname, new_weight
+                    del new_weight
                 else:
                     yield subname, weight
+                
+                # Delete original weight reference so Python GC reclaims it immediately
+                del weight
 
         llama_loaded_params = self.tfmr.load_weights(generate_expanded_llama_weights())
         loaded_params.update('tfmr.' + i for i in llama_loaded_params)
