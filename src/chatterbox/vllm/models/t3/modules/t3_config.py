@@ -7,8 +7,8 @@ T3_CONFIG = {
     "num_hidden_layers": 30,
     "num_key_value_heads": 32,
     "rms_norm_eps": 1e-05,
-    "vocab_size": 32000,
-    "rope_theta": 10000.0,
+    "vocab_size": 8,
+    "rope_theta": 500000.0,
     "max_position_embeddings": 8192,
 }
 
@@ -22,8 +22,8 @@ class T3Config:
         self.n_layers = 30
         self.n_kv_heads = 16
         self.rms_norm_eps = 1e-05
-        self.vocab_size = 32000
-        self.rope_theta = 10000.0
+        self.vocab_size = 8
+        self.rope_theta = 500000.0
         self.max_position_embeddings = 8192
         
         # Tokenizer dict sizes
