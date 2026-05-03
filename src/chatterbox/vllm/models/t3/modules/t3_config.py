@@ -3,10 +3,8 @@ class T3Config:
     stop_text_token = 0
     max_text_tokens = 2048
 
-    # HACK: We're hard-coding this into t3.py for now
-    # text_tokens_dict_size_english = 704
-    # text_tokens_dict_size_multilingual = 2454
-
+    # Default sizes
+    text_tokens_dict_size = 2455 # For Nepali models
     start_speech_token = 6561
     stop_speech_token = 6562
     speech_tokens_dict_size = 8194
@@ -21,4 +19,10 @@ class T3Config:
     speaker_embed_size = 256
     use_perceiver_resampler = True
     emotion_adv = True
-    n_channels = 1024 # hidden_size from config.json
+    n_channels = 1024 
+
+    @classmethod
+    def multilingual(cls):
+        config = cls()
+        config.text_tokens_dict_size = 2455 # Same for multilingual
+        return config
