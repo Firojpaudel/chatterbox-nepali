@@ -408,32 +408,41 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             # Pop items from the dictionary to aggressively free System RAM during iteration!
             while hf_llama_weights:
                 subname, weight = hf_llama_weights.popitem()
-                if any(x in subname for x in ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj", "mlp.gate_proj", "mlp.up_proj", "mlp.down_proj"]):
-                    dim0, dim1 = weight.shape
-                    new_weight = torch.zeros((dim0 * 2, dim1 * 2), dtype=weight.dtype, device=weight.device)
-                    new_weight[:dim0, :dim1] = weight
-                    new_weight[dim0:, dim1:] = weight
-                    yield subname, new_weight
-                    del new_weight
-                elif any(x in subname for x in ["input_layernorm.weight", "post_attention_layernorm.weight", "norm.weight", "norm.bias"]):
-                    new_weight = torch.cat([weight, weight], dim=0)
+                if "q_proj" in subname or "k_proj" in subname or "v_proj" in subname or "gate_proj" in subname or "up_proj" in subname:
+                    # BLOCK-DIAGONAL FIX: Perfect isolation barrier
+                    target_dim = self.dim # 4096
+                    new_weight = torch.zeros((target_dim, target_dim if weight.dim() == 2 else target_dim), dtype=weight.dtype, device=weight.device)
+                    # Put Cond in [0:1024] and Uncond in [1024:2048]
+                    new_weight[:1024, :1024] = weight
+                    new_weight[1024:2048, 1024:2048] = weight
                     yield subname, new_weight
                     del new_weight
                 elif "o_proj" in subname or "down_proj" in subname:
                     # BLOCK-DIAGONAL FIX: Perfect isolation barrier
-                    new_weight = torch.zeros((weight.shape[0] * 2, weight.shape[1] * 2), dtype=weight.dtype, device=weight.device)
-                    new_weight[:weight.shape[0], :weight.shape[1]] = weight
-                    new_weight[weight.shape[0]:, weight.shape[1]:] = weight
+                    target_dim = self.dim # 4096
+                    new_weight = torch.zeros((target_dim, target_dim), dtype=weight.dtype, device=weight.device)
+                    new_weight[:1024, :1024] = weight
+                    new_weight[1024:2048, 1024:2048] = weight
+                    yield subname, new_weight
+                    del new_weight
+                elif "input_layernorm.weight" in subname or "post_attention_layernorm.weight" in subname or "norm.weight" in subname or "norm.bias" in subname:
+                    target_dim = self.dim # 4096
+                    new_weight = torch.zeros((target_dim,), dtype=weight.dtype, device=weight.device)
+                    new_weight[:1024] = weight
+                    new_weight[1024:2048] = weight
                     yield subname, new_weight
                     del new_weight
                 elif "embed_tokens.weight" in subname:
-                    # weight is [8, 1024]. Expand to [8, 2048]
-                    expanded_weight = torch.cat([weight, weight], dim=1)
+                    # weight is [8, 1024]. Expand to [8, 4096]
+                    target_dim = self.dim # 4096
+                    expanded_weight = torch.zeros((weight.shape[0], target_dim), device=weight.device, dtype=weight.dtype)
+                    expanded_weight[:, :1024] = weight
+                    expanded_weight[:, 1024:2048] = weight
                     # Pad to the full 32000 vocab size we defined in config
-                    final_weight = torch.zeros((32000, expanded_weight.shape[1]), 
+                    final_weight = torch.zeros((32000, target_dim), 
                                               device=expanded_weight.device, 
                                               dtype=expanded_weight.dtype)
-                    final_weight[:expanded_weight.shape[0]] = expanded_weight
+                    final_weight[:weight.shape[0], :] = expanded_weight
                     yield subname, final_weight
                     del final_weight, expanded_weight
                 else:
