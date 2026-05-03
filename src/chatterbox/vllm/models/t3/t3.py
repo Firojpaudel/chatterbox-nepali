@@ -608,29 +608,22 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         return logits
 
 
-    def forward(
-        self,
-        input_ids: Optional[torch.Tensor],  # Almost always None
-        positions: torch.Tensor,  # Position IDs since start of the context (i.e. since the first conditional token)
-        intermediate_tensors: Optional[IntermediateTensors],  # Almost always None
-        inputs_embeds: Optional[torch.Tensor] = None,  # The actual inputs to the model
-        **kwargs: object,
-    ) -> torch.Tensor:
-        # print("t3 ###")
-        # print("t3/inputs_embeds", inputs_embeds.shape, inputs_embeds.dtype)
-        # print("t3/positions", positions.shape, positions.dtype)
+        # Extract vLLM specific objects from kwargs
+        kv_caches = kwargs.get("kv_caches")
+        attn_metadata = kwargs.get("attn_metadata")
 
-        # These are usually NULL:
-        # print("t3/intermediate_tensors", intermediate_tensors)
-        # print("t3/input_ids", input_ids)
-        # print("t3/kwargs", kwargs)
-
-        hidden_states = self.tfmr(
-            input_ids=None,
-            positions=positions,
-            intermediate_tensors=None,
-            inputs_embeds=inputs_embeds
-        )
+        # Manually run the transformer layers to bypass the broken embedding lookup in vLLM's LlamaModel
+        hidden_states = inputs_embeds
+        residual = None
+        for layer in self.tfmr.layers:
+            hidden_states, residual = layer(
+                positions,
+                hidden_states,
+                residual,
+                kv_caches,
+                attn_metadata,
+            )
+        hidden_states = self.tfmr.norm(hidden_states, residual)
         # print("t3/hidden_states", hidden_states.shape, hidden_states.dtype)
 
         # Reconcatenate the hidden states into the master tensor
