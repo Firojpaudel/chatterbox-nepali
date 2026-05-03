@@ -292,9 +292,10 @@ class ChatterboxTTS:
             target_vocab = 8
             with open(config_dest, "r") as f:
                 cfg_data = json.load(f)
-            if cfg_data.get("vocab_size") != target_vocab:
-                print(f"🔧 Forcing vocab_size to {target_vocab} in {config_dest}")
+            if cfg_data.get("vocab_size") != target_vocab or cfg_data.get("num_hidden_layers") != 25:
+                print(f"🔧 Forcing config update: vocab_size={target_vocab}, layers=25 in {config_dest}")
                 cfg_data["vocab_size"] = target_vocab
+                cfg_data["num_hidden_layers"] = 25
                 with open(config_dest, "w") as f:
                     json.dump(cfg_data, f, indent=2)
         except Exception as e:
@@ -386,9 +387,10 @@ class ChatterboxTTS:
         try:
             with open(config_dest, "r") as f:
                 cfg_data = json.load(f)
-            if cfg_data.get("vocab_size") != 8:
-                print(f"🔧 Forcing vocab_size to 8 in {config_dest}")
+            if cfg_data.get("vocab_size") != 8 or cfg_data.get("num_hidden_layers") != 25:
+                print(f"🔧 Forcing config update: vocab_size=8, layers=25 in {config_dest}")
                 cfg_data["vocab_size"] = 8
+                cfg_data["num_hidden_layers"] = 25
                 with open(config_dest, "w") as f:
                     json.dump(cfg_data, f, indent=2)
         except Exception as e:
