@@ -475,9 +475,12 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                                 dtype=self.speech_head.weight.dtype, 
                                 device=input_ids.device)
 
-        # Get the unique ID for this request's conditioning data
+        # Get the unique fingerprint for this request's conditioning data
         cond_tensor = multimodal_embeddings[0] if (multimodal_embeddings and len(multimodal_embeddings) > 0) else None
-        cond_id = id(cond_tensor) if cond_tensor is not None else None
+        # Use first 16 values as a stable key (vLLM might clone the tensor)
+        req_key = None
+        if cond_tensor is not None:
+             req_key = tuple(cond_tensor[0, :16].cpu().tolist())
 
         if input_ids is not None and (input_ids >= SPEECH_TOKEN_OFFSET).any():
             speech_ids = torch.clamp(input_ids - SPEECH_TOKEN_OFFSET, min=0)
@@ -485,9 +488,14 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             
             # Use cached prompt length to calculate relative speech position
             prompt_len = 36 + 20 # Conservative fallback
-            if cond_id in self.prompt_len_cache:
-                prompt_len = self.prompt_len_cache[cond_id]
+            cache_hit = False
+            if req_key in self.prompt_len_cache:
+                prompt_len = self.prompt_len_cache[req_key]
+                cache_hit = True
             
+            if cache_hit and positions[0] % 100 == 0:
+                 print(f"DEBUG: Position Cache HIT. Prompt Len: {prompt_len}, Rel Pos: {positions[0] - prompt_len}")
+
             rel_pos = (positions - prompt_len).clamp(min=0)
             embeds = embeds + self.precomputed_speech_pos_emb[rel_pos]
             
@@ -557,8 +565,8 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     final_embeds = torch.cat([cond_embeds, uncond_embeds], dim=1)
                     
                     # Store prompt length for decoding stage positional alignment
-                    if cond_id is not None:
-                         self.prompt_len_cache[cond_id] = ids.shape[0]
+                    if req_key is not None:
+                         self.prompt_len_cache[req_key] = ids.shape[0]
                          
                     out.append(final_embeds)
                 elif ids[0] == PREFILL_COND_START_TOKEN:
@@ -691,8 +699,9 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             print(f"DEBUG: compute_logits - Cond Logits: mean={c_l_mean:.4f}, std={c_l_std:.4f} | Uncond Logits: mean={u_l_mean:.4f}, std={u_l_std:.4f}")
             self._log_logits = getattr(self, '_log_logits', 0) + 1
     
-        # 4. Final Combination
-        logits = cond_logits + self.cfg_scale * (cond_logits - uncond_logits)
+        # 4. Final Combination: Standard CFG formula
+        # logits = uncond + scale * (cond - uncond)
+        logits = uncond_logits + self.cfg_scale * (cond_logits - uncond_logits)
         
         # 5. Safety: Logit Masking
         # We MUST ensure the model only samples valid speech tokens (IDs 2560 to 2560+8192)
