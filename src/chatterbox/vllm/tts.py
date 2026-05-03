@@ -502,7 +502,12 @@ class ChatterboxTTS:
                     if i % 10 == 0:
                         torch.cuda.empty_cache()
 
-                    speech_tokens = torch.tensor([token - SPEECH_TOKEN_OFFSET for token in output.token_ids], device="cuda")
+                    # Offset the tokens back to 0-8191 for the S3 synthesizer
+                    # IMPORTANT: We MUST filter out the STOP token (8192+) which vLLM might include.
+                    speech_tokens = [t - MULTILINGUAL_SPEECH_TOKEN_OFFSET for t in output.token_ids 
+                                     if MULTILINGUAL_SPEECH_TOKEN_OFFSET <= t < MULTILINGUAL_SPEECH_TOKEN_OFFSET + 8192]
+                    speech_tokens = torch.tensor(speech_tokens, device="cuda")
+                    
                     speech_tokens = drop_invalid_tokens(speech_tokens)
                     speech_tokens = speech_tokens[speech_tokens < self.t3_config.stop_speech_token]
 
