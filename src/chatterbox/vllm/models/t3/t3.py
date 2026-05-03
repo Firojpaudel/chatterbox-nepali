@@ -323,6 +323,10 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 elif any(x in subname for x in ["input_layernorm.weight", "post_attention_layernorm.weight", "model.norm.weight", "model.norm.bias"]):
                     # Layer norms and biases are 1D vectors: [W, W]
                     hf_llama_weights[subname] = torch.cat([weight, weight], dim=0)
+                elif "embed_tokens.weight" in subname:
+                    # Embed tokens are [vocab_size, 1024], we need [vocab_size, 2048].
+                    # Even though t3.py bypasses embed_tokens, LlamaModel requires it to be initialized correctly.
+                    hf_llama_weights[subname] = torch.cat([weight, weight], dim=1)
                 else:
                     hf_llama_weights[subname] = weight
                 
