@@ -667,19 +667,33 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             print(f"DEBUG: compute_logits - Cond Logits: mean={c_l_mean:.4f}, std={c_l_std:.4f} | Uncond Logits: mean={u_l_mean:.4f}, std={u_l_std:.4f}")
             self._log_logits = getattr(self, '_log_logits', 0) + 1
     
+        # 4. Final Combination
         logits = cond_logits + self.cfg_scale * (cond_logits - uncond_logits)
         
+        # 5. Safety: Logit Masking
+        # We MUST ensure the model only samples valid speech tokens (IDs 2560 to 2560+8192)
+        # Any token outside this range will be forced to -inf.
+        # This prevents "leaking" into text tokens which would cause garbage audio.
+        mask = torch.ones_like(logits, dtype=torch.bool)
+        # 8192 is the number of speech tokens. 
+        # We also allow the stop token (8194 relative to our speech_head)
+        mask[:, :8192] = False 
+        mask[:, 8194] = False # Allow STOP token
+        
+        logits.masked_fill_(mask, -float('inf'))
+
+        # 6. Diagnostics
         if getattr(self, '_log_final_logits', 0) < 5:
              f_mean, f_std = logits.mean().item(), logits.std().item()
-             print(f"DEBUG: compute_logits - Final Combined Logits: mean={f_mean:.4f}, std={f_std:.4f}")
+             print(f"DEBUG: compute_logits - Final Combined Logits (Masked): mean={f_mean:.4f}, std={f_std:.4f}")
              self._log_final_logits = getattr(self, '_log_final_logits', 0) + 1
     
-        # HACK: Offset the logits so the resulting speech token is +SPEECH_TOKEN_OFFSET from the normal speech tokens.
+        # 7. Offset the logits so the resulting speech token is +SPEECH_TOKEN_OFFSET 
         padding = torch.full((logits.shape[0], SPEECH_TOKEN_OFFSET), float('-inf'), 
                              dtype=logits.dtype, device=logits.device)
         logits = torch.cat([padding, logits], dim=1)
         
-        # Pad up to the full 32000 vocab size expected by vLLM config
+        # 8. Pad up to the full 32000 vocab size expected by vLLM config
         if logits.shape[1] < 32000:
             extra_padding = torch.full((logits.shape[0], 32000 - logits.shape[1]), float('-inf'), 
                                       dtype=logits.dtype, device=logits.device)
