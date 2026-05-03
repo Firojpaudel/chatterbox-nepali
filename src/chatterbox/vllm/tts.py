@@ -105,15 +105,15 @@ MULTILINGUAL_VLLM_CONFIG = {
     "attn_implementation": "sdpa",
     "head_dim": 64,
     "hidden_act": "silu",
-    "hidden_size": 2048,       # HACK: doubled from 1024 for CFG
+    "hidden_size": 2048,       # Expanded for block-diagonal CFG
     "initializer_range": 0.02,
-    "intermediate_size": 4096,
+    "intermediate_size": 8192, # Expanded from 4096
     "max_position_embeddings": 131072,
     "mlp_bias": False,
     "model_type": "llama",
-    "num_attention_heads": 16,
+    "num_attention_heads": 32, # Expanded from 16
     "num_hidden_layers": 30,
-    "num_key_value_heads": 16,
+    "num_key_value_heads": 32, # Expanded from 16
     "pretraining_tp": 1,
     "rms_norm_eps": 1e-05,
     "rope_scaling": {
@@ -311,13 +311,6 @@ class ChatterboxTTS:
         print(f"Giving vLLM {vllm_memory_percent * 100:.2f}% of GPU memory ({vllm_memory_needed / 1024**2:.2f} MB)")
 
         # ── 5. Start vLLM engine ──────────────────────────────────────────
-        # HACK: The chatterbox T3 model concatenates cond and uncond embeds, passing 2N tokens 
-        # to the LLaMA backbone while the engine only tracks N tokens. 
-        # The default xformers backend crashes due to strict shape assertions:
-        # `assert decode_query.shape[0] == num_decode_query_tokens`.
-        # Forcing PyTorch SDPA attention bypasses this assert and allows CFG to process.
-        os.environ["VLLM_ATTENTION_BACKEND"] = "TORCH_SDPA"
-
         base_vllm_kwargs = {
             "model": "./t3-model",
             "task": "generate",

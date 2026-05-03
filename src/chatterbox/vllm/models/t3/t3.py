@@ -257,10 +257,10 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str):
         super().__init__()
-        # HACK: We changed the hidden size to 2048 to trick VLLM into thinking that the model has a hidden size of 2048.
-        #       This is needed to accomodate the extra data for the CFG uncond prompt.
-        #       We need to change it back to 1024 for loading the actual llama model.
-        vllm_config.model_config.hf_config.hidden_size = 1024
+        # The model is initialized with hidden_size=2048 natively.
+        # We will dynamically expand the 1024-dim weights to 2048-dim block-diagonal
+        # matrices in load_weights. This allows the 32 heads to process the cond
+        # and uncond sequences independently in a single native vLLM engine pass!
         self.vllm_config = vllm_config
         self.cfg: ModelConfig = vllm_config.model_config
 
@@ -311,7 +311,21 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             # Llama weights need to be passed through vllm's load_weights rather than load_state_dict
             if name.startswith("tfmr."):
                 subname = name[5:]
-                hf_llama_weights[subname] = weight
+                
+                # Perform In-Memory Block-Diagonal Weight Expansion for CFG
+                if any(x in subname for x in ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj", "mlp.gate_proj", "mlp.up_proj", "mlp.down_proj"]):
+                    # Create a 2x2 block diagonal matrix: [[W, 0], [0, W]]
+                    dim0, dim1 = weight.shape
+                    new_weight = torch.zeros((dim0 * 2, dim1 * 2), dtype=weight.dtype, device=weight.device)
+                    new_weight[:dim0, :dim1] = weight
+                    new_weight[dim0:, dim1:] = weight
+                    hf_llama_weights[subname] = new_weight
+                elif any(x in subname for x in ["input_layernorm.weight", "post_attention_layernorm.weight", "model.norm.weight", "model.norm.bias"]):
+                    # Layer norms and biases are 1D vectors: [W, W]
+                    hf_llama_weights[subname] = torch.cat([weight, weight], dim=0)
+                else:
+                    hf_llama_weights[subname] = weight
+                
                 continue
             loaded_params.add(name)
             attr, subname = name.split('.', 1)
@@ -624,24 +638,20 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings(input_ids, [])
 
-        # Split the inputs_embeds into the three parts
-        cond_embeds, uncond_embeds = inputs_embeds.split([self.dim, self.dim], dim=1)
-        # print("t3/embeds", embeds.shape, embeds.dtype)
-        # print("t3/cfg_embeds", cfg_embeds.shape, cfg_embeds.dtype)
-
-        # TODO: Apply speech positional embeddings here
-
+        # inputs_embeds is ALREADY concatenated along the hidden_size dimension (dim=-1)
+        # because get_input_embeddings does: torch.cat([cond_embeds, uncond_embeds], dim=1)
+        # where dim=1 is the hidden dimension. Thus, its shape is [seq_len, 2048].
+        
+        # We process the 2048-dim embeddings through our expanded 2048-dim backbone natively!
         hidden_states = self.tfmr(
             input_ids=None,
-            positions=torch.cat([positions, positions], dim=0),
+            positions=positions, # Native sequence length, no batch duplication hack!
             intermediate_tensors=None,
-            inputs_embeds=torch.cat([cond_embeds, uncond_embeds], dim=0)
+            inputs_embeds=inputs_embeds # [N, 2048]
         )
-        # print("t3/hidden_states", hidden_states.shape, hidden_states.dtype)
-
-        # Reconcatenate the hidden states into the master tensor
-        hidden_state_1, hidden_state_2 = hidden_states.split([len(cond_embeds), len(uncond_embeds)], dim=0)
-        return torch.cat([hidden_state_1, hidden_state_2], dim=1)
+        
+        # Return the 2048-dim hidden states. They will be split in compute_logits.
+        return hidden_states
 
     def get_language_model(self) -> torch.nn.Module:
         return self.tfmr
