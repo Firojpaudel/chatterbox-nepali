@@ -408,6 +408,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             # Pop items from the dictionary to aggressively free System RAM during iteration!
             while hf_llama_weights:
                 subname, weight = hf_llama_weights.popitem()
+                print(f"DEBUG: Processing backbone weight {subname} checkpoint shape: {list(weight.shape)}")
                 if "q_proj" in subname or "k_proj" in subname or "v_proj" in subname or "gate_proj" in subname or "up_proj" in subname:
                     # BLOCK-DIAGONAL FIX: Perfect isolation barrier
                     target_dim = self.dim # 4096
@@ -415,6 +416,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     # Put Cond in [0:1024] and Uncond in [1024:2048]
                     new_weight[:1024, :1024] = weight
                     new_weight[1024:2048, 1024:2048] = weight
+                    print(f"DEBUG: Yielding backbone weight {subname} shape: {list(new_weight.shape)}")
                     yield subname, new_weight
                     del new_weight
                 elif "o_proj" in subname or "down_proj" in subname:
@@ -423,6 +425,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     new_weight = torch.zeros((target_dim, target_dim), dtype=weight.dtype, device=weight.device)
                     new_weight[:1024, :1024] = weight
                     new_weight[1024:2048, 1024:2048] = weight
+                    print(f"DEBUG: Yielding backbone weight {subname} shape: {list(new_weight.shape)}")
                     yield subname, new_weight
                     del new_weight
                 elif "input_layernorm.weight" in subname or "post_attention_layernorm.weight" in subname or "norm.weight" in subname or "norm.bias" in subname:
@@ -430,6 +433,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     new_weight = torch.zeros((target_dim,), dtype=weight.dtype, device=weight.device)
                     new_weight[:1024] = weight
                     new_weight[1024:2048] = weight
+                    print(f"DEBUG: Yielding backbone weight {subname} shape: {list(new_weight.shape)}")
                     yield subname, new_weight
                     del new_weight
                 elif "embed_tokens.weight" in subname:
@@ -443,9 +447,11 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                                               device=expanded_weight.device, 
                                               dtype=expanded_weight.dtype)
                     final_weight[:weight.shape[0], :] = expanded_weight
+                    print(f"DEBUG: Yielding backbone weight {subname} shape: {list(final_weight.shape)}")
                     yield subname, final_weight
                     del final_weight, expanded_weight
                 else:
+                    print(f"DEBUG: Yielding original backbone weight {subname} shape: {list(weight.shape)}")
                     yield subname, weight
                 
                 # Delete original weight reference so Python GC reclaims it immediately
