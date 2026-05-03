@@ -323,18 +323,20 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
     def forward(self, input_ids: Optional[torch.Tensor] = None, positions: Optional[torch.Tensor] = None, 
                 intermediate_tensors: Optional[IntermediateTensors] = None, inputs_embeds: Optional[torch.Tensor] = None, **kwargs):
-        kv_caches = kwargs.get('kv_caches')
-        attn_metadata = kwargs.get('attn_metadata')
-
+        # Catch all vLLM arguments in **kwargs but ONLY pass what tfmr (LlamaModel) is known to support in this Colab env
         if inputs_embeds is None:
             mm_data = self.get_multimodal_embeddings(**kwargs)
             inputs_embeds = self.get_input_embeddings(input_ids, mm_data)
 
         cond_embeds, uncond_embeds = inputs_embeds.split([self.dim, self.dim], dim=1)
-        hidden_states = self.tfmr(input_ids=None, positions=torch.cat([positions, positions], dim=0),
-                                 kv_caches=kv_caches, attn_metadata=attn_metadata,
-                                 intermediate_tensors=intermediate_tensors, 
-                                 inputs_embeds=torch.cat([cond_embeds, uncond_embeds], dim=0))
+        
+        # Aligned exactly with the reference repo's proven call site
+        hidden_states = self.tfmr(
+            input_ids=None,
+            positions=torch.cat([positions, positions], dim=0),
+            intermediate_tensors=intermediate_tensors, 
+            inputs_embeds=torch.cat([cond_embeds, uncond_embeds], dim=0)
+        )
         
         h1, h2 = hidden_states.split([len(cond_embeds), len(uncond_embeds)], dim=0)
         return torch.cat([h1, h2], dim=1)
