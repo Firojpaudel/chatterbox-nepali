@@ -314,15 +314,20 @@ class ChatterboxTTS:
         torch.cuda.empty_cache()
 
         # ── 3. Set up t3-model/ directory for vLLM engine ─────────────────
-        model_dir = Path.cwd() / "t3-model"
-        model_dir.mkdir(parents=True, exist_ok=True)
+        # Ensure fresh model directory for vLLM
+        model_dir = Path("./t3-model")
+        if model_dir.exists():
+            import shutil
+            shutil.rmtree(model_dir)
+        model_dir.mkdir(exist_ok=True)
 
         # Symlink model weights
         model_safetensors = model_dir / "model.safetensors"
-        model_safetensors.unlink(missing_ok=True)
         model_safetensors.symlink_to(model_filename)
 
         # Write correct multilingual config.json
+        print(f"DEBUG: Writing vLLM config.json to {model_dir / 'config.json'}")
+        print(f"DEBUG: Config content: {json.dumps(MULTILINGUAL_VLLM_CONFIG, indent=2)}")
         with open(model_dir / "config.json", "w") as f:
             json.dump(MULTILINGUAL_VLLM_CONFIG, f, indent=2)
 
