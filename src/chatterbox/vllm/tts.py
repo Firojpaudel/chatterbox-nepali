@@ -278,13 +278,26 @@ class ChatterboxTTS:
                 "num_hidden_layers": 24,
                 "intermediate_size": 4096,
                 "max_position_embeddings": 2048,
-                "vocab_size": 2500,
+                "vocab_size": 2455,
                 "tokenizer": "EnTokenizer" if variant == "english" else "MtlTokenizer",
                 "torch_dtype": "float16"
             }
             with open(config_dest, "w") as f:
                 json.dump(config_data, f, indent=2)
             print(f"Generated default vLLM config at {config_dest}")
+
+        # 4. Final sanity check: Overwrite vocab_size (critical for weight loading)
+        try:
+            target_vocab = 704 if variant == "english" else 2455
+            with open(config_dest, "r") as f:
+                cfg_data = json.load(f)
+            if cfg_data.get("vocab_size") != target_vocab:
+                print(f"🔧 Forcing vocab_size to {target_vocab} in {config_dest}")
+                cfg_data["vocab_size"] = target_vocab
+                with open(config_dest, "w") as f:
+                    json.dump(cfg_data, f, indent=2)
+        except Exception as e:
+            print(f"Warning: Could not perform final config sanity check: {e}")
                 
         model_path = vllm_cache_dir / "model.safetensors"
         model_path.unlink(missing_ok=True)
@@ -361,13 +374,25 @@ class ChatterboxTTS:
                 "num_hidden_layers": 24,
                 "intermediate_size": 4096,
                 "max_position_embeddings": 2048,
-                "vocab_size": 2500,
+                "vocab_size": 2455,
                 "tokenizer": "MtlTokenizer",
                 "torch_dtype": "float16"
             }
             with open(config_dest, "w") as f:
                 json.dump(config_data, f, indent=2)
             print(f"Generated default vLLM config at {config_dest}")
+        
+        # 4. Final sanity check: Overwrite vocab_size to 2455 (critical for weight loading)
+        try:
+            with open(config_dest, "r") as f:
+                cfg_data = json.load(f)
+            if cfg_data.get("vocab_size") != 2455:
+                print(f"🔧 Forcing vocab_size to 2455 in {config_dest}")
+                cfg_data["vocab_size"] = 2455
+                with open(config_dest, "w") as f:
+                    json.dump(cfg_data, f, indent=2)
+        except Exception as e:
+            print(f"Warning: Could not perform final config sanity check: {e}")
         
         model_vllm_path = vllm_cache_dir / "model.safetensors"
         model_vllm_path.unlink(missing_ok=True)
