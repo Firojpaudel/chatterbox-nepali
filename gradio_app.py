@@ -246,7 +246,7 @@ def generate_tts_audio(
     seed_num_input, enable_sanitizer, enable_chunking, enable_protection, speed_input,
     repetition_penalty_input, top_p_input, min_p_input, use_vllm
 ):
-    model = get_or_load_model()
+    model = get_or_load_model(use_vllm=use_vllm)
     ref_path = audio_prompt_input or os.path.join("samples", ref_dropdown_input)
     if not os.path.exists(ref_path): ref_path = "samples/Prakash.mp3"
     
