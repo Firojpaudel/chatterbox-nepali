@@ -41,7 +41,6 @@ PREFILL_COND_START_TOKEN = 695
 PREFILL_COND_END_TOKEN = 696
 PREFILL_END_TOKEN = 697
 
-# Standard SPEECH_TOKEN_OFFSET for Nepali models
 SPEECH_TOKEN_OFFSET = 2560
 CONDITIONING_SIZE = 34
 
@@ -158,7 +157,7 @@ class T3MultiModalProcessor(BaseMultiModalProcessor[T3ProcessingInfo]):
 class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str):
         super().__init__()
-        # Tricking vLLM into doubling states for CFG
+        # Tricking vLLM to allocate double state for CFG
         vllm_config.model_config.hf_config.hidden_size = 1024
         self.vllm_config = vllm_config
         self.cfg: ModelConfig = vllm_config.model_config
@@ -191,7 +190,6 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         state_dicts = {}
         hf_llama_weights = {}
         
-        # Filter for valid Llama weights to avoid KeyError (e.g. num_batches_tracked)
         valid_llama_suffixes = {
             "embed_tokens.weight", "norm.weight", "layers.",
             "self_attn.q_proj.weight", "self_attn.k_proj.weight", "self_attn.v_proj.weight", "self_attn.o_proj.weight",
@@ -204,7 +202,6 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             name = raw_name
             if "tfmr." in name:
                 subname = name[name.find("tfmr.")+5:]
-                # Filter out metadata keys like num_batches_tracked that cause vLLM to crash
                 if any(suffix in subname for suffix in valid_llama_suffixes):
                     if subname == "embed_tokens.weight" and weight.shape[0] < 32000:
                         padding = torch.zeros((32000 - weight.shape[0], weight.shape[1]), dtype=weight.dtype, device=weight.device)
@@ -324,9 +321,11 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         padding = torch.full((logits.shape[0], SPEECH_TOKEN_OFFSET), float('-inf'), dtype=logits.dtype, device=logits.device)
         return torch.cat([padding, logits], dim=1)
 
-    def forward(self, input_ids, positions, kv_caches, attn_metadata, intermediate_tensors=None, inputs_embeds=None):
+    def forward(self, input_ids, positions, kv_caches, attn_metadata, intermediate_tensors=None, inputs_embeds=None, **kwargs):
         if inputs_embeds is None:
-            inputs_embeds = self.get_input_embeddings(input_ids, [])
+            # Reconstruct inputs_embeds using provided kwargs (which contain 'conditionals')
+            mm_data = self.get_multimodal_embeddings(**kwargs)
+            inputs_embeds = self.get_input_embeddings(input_ids, mm_data)
 
         cond_embeds, uncond_embeds = inputs_embeds.split([self.dim, self.dim], dim=1)
         hidden_states = self.tfmr(input_ids=None, positions=torch.cat([positions, positions], dim=0),
