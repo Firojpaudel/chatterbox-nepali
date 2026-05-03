@@ -159,8 +159,7 @@ class T3MultiModalProcessor(BaseMultiModalProcessor[T3ProcessingInfo]):
 class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str):
         super().__init__()
-        # ARCHITECTURAL LANE DOUBLING (2x 1024 = 2048)
-        # We must also double the intermediate size for consistent MLP behavior.
+        # ARCHITECTURAL LANE DOUBLING (1024 -> 2048)
         orig_hidden = vllm_config.model_config.hf_config.hidden_size
         vllm_config.model_config.hf_config.hidden_size = orig_hidden * 2
         if hasattr(vllm_config.model_config.hf_config, "intermediate_size"):
@@ -196,12 +195,18 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         state_dicts = {}
         hf_llama_weights = {}
         
+        # Diagnostic map to help identify expected shapes
+        expected_shapes = {}
+        for n, p in self.tfmr.named_parameters():
+            expected_shapes[n] = p.shape
+
+        print("--- T3 Weight Expansion Diagnostic ---")
         for raw_name, weight in weights:
             name = raw_name
             if "tfmr." in name:
                 subname = name[name.find("tfmr.")+5:]
                 
-                # Expand weights to match the doubled config (2x 1024 = 2048)
+                # Expand weights to match the doubled config
                 if "qkv_proj.weight" in subname:
                     q, k, v = weight.chunk(3, dim=0)
                     new_q = torch.block_diag(q, q)
@@ -218,6 +223,12 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 elif "norm.weight" in subname:
                     weight = torch.cat([weight, weight], dim=0)
 
+                # DIAGNOSTIC PRINT
+                if subname in expected_shapes:
+                    exp = expected_shapes[subname]
+                    if weight.shape != exp:
+                        print(f"SHAPE MISMATCH: {subname} | Loaded: {weight.shape} | Expected: {exp}")
+                
                 hf_llama_weights[subname] = weight
                 continue
             
