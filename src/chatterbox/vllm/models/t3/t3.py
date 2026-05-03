@@ -458,14 +458,9 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
             if self.SAFE_MODE:
                 return embeds
-            
-            out = torch.cat([embeds, embeds], dim=1)
-
-            # if len(out) != len(input_ids):
-            #     print("t3/get_input_embeddings/out", out.shape, out.dtype)
-            #     print("t3/get_input_embeddings/input_ids", input_ids.shape, input_ids.dtype)
-            # assert len(out) == len(input_ids), "Number of output elements does not match number of input elements"
-            return out
+            else:
+                # In CFG mode, we need to duplicate the speech embedding for the uncond path
+                return torch.cat([embeds, embeds], dim=-1)
         else:
             # print("t3/get_input_embeddings/multimodal_embeddings", len(multimodal_embeddings))
             # print("t3/get_input_embeddings/input_ids", input_ids.shape, input_ids.dtype, input_ids)
@@ -666,6 +661,15 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         # print("t3 ###")
         # print("t3/inputs_embeds", inputs_embeds.shape if inputs_embeds is not None else None)
         # print("t3/positions", positions.shape, positions.dtype)
+
+        if inputs_embeds is None and input_ids is not None:
+            # During decoding, vLLM passes input_ids and inputs_embeds=None.
+            # If we don't provide inputs_embeds, LlamaModel will use its own embed_tokens which is UNTRAINED!
+            # We must explicitly use our own speech_emb.
+            # However, during profiling, vLLM passes random dummy input_ids.
+            # We can detect real decoding because all speech tokens will be >= SPEECH_TOKEN_OFFSET.
+            if (input_ids >= SPEECH_TOKEN_OFFSET).all():
+                inputs_embeds = self.get_input_embeddings(input_ids, [])
 
         if self.SAFE_MODE:
             # Delegate to self.tfmr (vLLM's LlamaModel) which handles:

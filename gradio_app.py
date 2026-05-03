@@ -167,10 +167,7 @@ def get_or_load_model(use_vllm=False):
         return model
 
 def switch_model(model_type):
-    global CURRENT_MODEL_TYPE, model, BASE_T3_STATE, FINETUNE_FILES
-    if model is None: 
-        print("Error: Model not loaded yet!")
-        return "Model not loaded"
+    global CURRENT_MODEL_TYPE, model, vllm_model, BASE_T3_STATE, FINETUNE_FILES
     
     # Clear cache before starting
     torch.cuda.empty_cache()
@@ -179,13 +176,25 @@ def switch_model(model_type):
     try:
         if model_type in FINETUNE_FILES:
             filename = FINETUNE_FILES[model_type]
-            print(f"--- Loading weights for: {model_type} ({filename}) ---")
+            print(f"--- Switching to: {model_type} ({filename}) ---")
             
-            # Reset vLLM model if it exists, so it reloads with new weights next time
-            global vllm_model
-            if vllm_model is not None:
-                vllm_model.shutdown()
-                vllm_model = None
+            if VLLM_MODE:
+                # Reset vLLM model so it reloads with new weights
+                if vllm_model is not None:
+                    del vllm_model
+                    vllm_model = None
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                
+                CURRENT_MODEL_TYPE = model_type
+                # Spawns a new vLLM engine with the new weights
+                get_or_load_model(use_vllm=True)
+                print(f"Successfully loaded {model_type} (vLLM Engine)")
+                return f"Active: {model_type} (vLLM)"
+
+            if model is None: 
+                print("Error: Standard Model not loaded yet!")
+                return "Model not loaded"
 
             if filename.endswith(".safetensors"):
                 from safetensors.torch import load_file
@@ -195,10 +204,9 @@ def switch_model(model_type):
             
             clean_state = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in state.items()}
             
-            if model is not None:
-                model.t3.load_state_dict(clean_state, strict=False)
-                model.t3.to(DEVICE).eval()
-                model.t3.compiled = False
+            model.t3.load_state_dict(clean_state, strict=False)
+            model.t3.to(DEVICE).eval()
+            model.t3.compiled = False
             
             # Immediately delete state to free RAM
             del state
