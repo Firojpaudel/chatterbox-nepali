@@ -261,8 +261,49 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         # We will dynamically expand the 1024-dim weights to 2048-dim block-diagonal
         # matrices in load_weights. This allows the 32 heads to process the cond
         # and uncond sequences independently in a single native vLLM engine pass!
-        self.vllm_config = vllm_config
-        self.cfg: ModelConfig = vllm_config.model_config
+        self.tfmr = get_model(vllm_config=vllm_config)
+
+        # Hot-patch vLLM's RMSNorm to prevent channel mixing!
+        # Standard RMSNorm computes the mean across the full 2048 dimension, which breaks our
+        # block-diagonal CFG by allowing the cond and uncond streams to scale each other.
+        # This custom module computes the RMS across the 1024-dim streams completely independently.
+        class BlockDiagonalRMSNorm(torch.nn.Module):
+            def __init__(self, vllm_rmsnorm):
+                super().__init__()
+                self.weight = vllm_rmsnorm.weight
+                self.variance_epsilon = vllm_rmsnorm.variance_epsilon
+                self.dim = self.weight.shape[0] // 2
+            
+            def forward(self, x, residual=None):
+                if residual is not None:
+                    x = x + residual
+                    residual = x
+                
+                # Cast to float32 for precision, split into the two streams
+                x_fp32 = x.to(torch.float32)
+                x1, x2 = x_fp32.split([self.dim, self.dim], dim=-1)
+                w1, w2 = self.weight.split([self.dim, self.dim], dim=-1)
+                
+                var1 = x1.pow(2).mean(-1, keepdim=True)
+                x1_norm = x1 * torch.rsqrt(var1 + self.variance_epsilon)
+                
+                var2 = x2.pow(2).mean(-1, keepdim=True)
+                x2_norm = x2 * torch.rsqrt(var2 + self.variance_epsilon)
+                
+                x_norm_fp16 = torch.cat([x1_norm, x2_norm], dim=-1).to(self.weight.dtype)
+                out = x_norm_fp16 * self.weight
+                
+                if residual is not None:
+                    return out, residual
+                return out
+
+        # Apply the patch to all layers and the final output norm
+        for layer in self.tfmr.model.layers:
+            layer.input_layernorm = BlockDiagonalRMSNorm(layer.input_layernorm)
+            layer.post_attention_layernorm = BlockDiagonalRMSNorm(layer.post_attention_layernorm)
+        self.tfmr.model.norm = BlockDiagonalRMSNorm(self.tfmr.model.norm)
+
+        self.cfg_scale = self.vllm_config.model_config.hf_config.cfg_scale
 
         # Initialize LLaMA backbone
         self.tfmr = LlamaModel(vllm_config=vllm_config, prefix=prefix + ".tfmr")
