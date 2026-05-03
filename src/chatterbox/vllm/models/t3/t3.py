@@ -225,8 +225,9 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         return loaded_params
 
     def get_multimodal_embeddings(self, **kwargs: object) -> Optional[MultiModalEmbeddings]:
-        conditionals: Optional[list[list[T3Cond]]] = kwargs.get("conditionals", [])
-        if not conditionals: return None
+        conditionals = kwargs.get("conditionals", [])
+        if conditionals is None or (isinstance(conditionals, list) and len(conditionals) == 0):
+            return None
         return [batch[0] for batch in conditionals]
 
     def split_prefill_decode(self, input_ids: torch.Tensor, multimodal_embeddings: list[torch.Tensor]) -> list[Tuple[torch.Tensor, Optional[torch.Tensor]]]:
@@ -320,7 +321,6 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
     def forward(self, input_ids: Optional[torch.Tensor] = None, positions: Optional[torch.Tensor] = None, 
                 intermediate_tensors: Optional[IntermediateTensors] = None, inputs_embeds: Optional[torch.Tensor] = None, **kwargs):
-        # Ultra-robust signature that catches all vLLM arguments (including kv_caches and attn_metadata) in **kwargs
         kv_caches = kwargs.get('kv_caches')
         attn_metadata = kwargs.get('attn_metadata')
 
