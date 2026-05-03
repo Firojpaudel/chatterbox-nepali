@@ -410,8 +410,8 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 subname, weight = hf_llama_weights.popitem()
                 print(f"DEBUG: Processing backbone weight {subname} checkpoint shape: {list(weight.shape)}")
                 if "q_proj" in subname or "k_proj" in subname or "v_proj" in subname:
-                    # Self-attention projections: [1024, 1024] -> [4096, 4096]
-                    target_dim = self.dim # 4096
+                    # Self-attention projections: [1024, 1024] -> [2048, 2048]
+                    target_dim = self.dim # 2048
                     new_weight = torch.zeros((target_dim, target_dim), dtype=weight.dtype, device=weight.device)
                     new_weight[:1024, :1024] = weight
                     new_weight[1024:2048, 1024:2048] = weight
@@ -419,9 +419,9 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     yield subname, new_weight
                     del new_weight
                 elif "gate_proj" in subname or "up_proj" in subname:
-                    # MLP up-projections: [4096, 1024] -> [8192, 4096]
+                    # MLP up-projections: [4096, 1024] -> [8192, 2048]
                     out_target = 8192
-                    in_target = self.dim # 4096
+                    in_target = self.dim # 2048
                     new_weight = torch.zeros((out_target, in_target), dtype=weight.dtype, device=weight.device)
                     new_weight[:4096, :1024] = weight
                     new_weight[4096:8192, 1024:2048] = weight
@@ -429,8 +429,8 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     yield subname, new_weight
                     del new_weight
                 elif "down_proj" in subname:
-                    # MLP down-projection: [1024, 4096] -> [4096, 8192]
-                    out_target = self.dim # 4096
+                    # MLP down-projection: [1024, 4096] -> [2048, 8192]
+                    out_target = self.dim # 2048
                     in_target = 8192
                     new_weight = torch.zeros((out_target, in_target), dtype=weight.dtype, device=weight.device)
                     new_weight[:1024, :4096] = weight
@@ -456,8 +456,8 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     yield subname, new_weight
                     del new_weight
                 elif "embed_tokens.weight" in subname:
-                    # weight is [8, 1024]. Expand to [8, 4096]
-                    target_dim = self.dim # 4096
+                    # weight is [8, 1024]. Expand to [8, 2048]
+                    target_dim = self.dim # 2048
                     expanded_weight = torch.zeros((weight.shape[0], target_dim), device=weight.device, dtype=weight.dtype)
                     expanded_weight[:, :1024] = weight
                     expanded_weight[:, 1024:2048] = weight

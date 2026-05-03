@@ -104,7 +104,7 @@ MULTILINGUAL_VLLM_CONFIG = {
     "attention_dropout": 0.0,
     "attn_implementation": "sdpa",
     "hidden_act": "silu",
-    "hidden_size": 4096,
+    "hidden_size": 2048,
     "initializer_range": 0.02,
     "intermediate_size": 8192,
     "max_position_embeddings": 8192,
