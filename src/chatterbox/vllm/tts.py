@@ -279,7 +279,7 @@ class ChatterboxTTS:
                 "num_hidden_layers": 24,
                 "intermediate_size": 4096,
                 "max_position_embeddings": 2048,
-                "vocab_size": 2455,
+                "vocab_size": 8,
                 "tokenizer": "EnTokenizer" if variant == "english" else "MtlTokenizer",
                 "torch_dtype": "float16"
             }
@@ -289,7 +289,7 @@ class ChatterboxTTS:
 
         # 4. Final sanity check: Overwrite vocab_size (critical for weight loading)
         try:
-            target_vocab = 704 if variant == "english" else 2455
+            target_vocab = 8
             with open(config_dest, "r") as f:
                 cfg_data = json.load(f)
             if cfg_data.get("vocab_size") != target_vocab:
@@ -374,7 +374,7 @@ class ChatterboxTTS:
                 "num_hidden_layers": 24,
                 "intermediate_size": 4096,
                 "max_position_embeddings": 2048,
-                "vocab_size": 2455,
+                "vocab_size": 8,
                 "tokenizer": "MtlTokenizer",
                 "torch_dtype": "float16"
             }
@@ -386,9 +386,9 @@ class ChatterboxTTS:
         try:
             with open(config_dest, "r") as f:
                 cfg_data = json.load(f)
-            if cfg_data.get("vocab_size") != 2455:
-                print(f"🔧 Forcing vocab_size to 2455 in {config_dest}")
-                cfg_data["vocab_size"] = 2455
+            if cfg_data.get("vocab_size") != 8:
+                print(f"🔧 Forcing vocab_size to 8 in {config_dest}")
+                cfg_data["vocab_size"] = 8
                 with open(config_dest, "w") as f:
                     json.dump(cfg_data, f, indent=2)
         except Exception as e:
