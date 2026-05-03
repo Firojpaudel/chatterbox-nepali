@@ -44,10 +44,10 @@ PREFILL_END_TOKEN = 697
 SPEECH_TOKEN_OFFSET = 2560
 CONDITIONING_SIZE = 34
 
-def create_triangular_matrix(m, n):
+def create_triangular_matrix(m, n, dtype=torch.float32):
     row_indices = torch.arange(m).unsqueeze(1)
     col_indices = torch.arange(n).unsqueeze(0)
-    return (col_indices <= row_indices).float()
+    return (col_indices <= row_indices).to(dtype)
 
 
 class T3ProcessingInfo(BaseProcessingInfo):
@@ -126,10 +126,12 @@ class T3MultiModalProcessor(BaseMultiModalProcessor[T3ProcessingInfo]):
         conditionals = mm_data.get("conditionals", None)
         assert conditionals is not None and len(conditionals) == 1
         
+        dev = conditionals[0].device
+        dtype = conditionals[0].dtype
         new_conditionals = torch.cat([
             conditionals[0],
-            create_triangular_matrix(len(prompt_ids), conditionals[0].shape[1]).to(conditionals[0].device),
-            torch.zeros(1, conditionals[0].shape[1]).to(conditionals[0].device),
+            create_triangular_matrix(len(prompt_ids), conditionals[0].shape[1], dtype=dtype).to(dev),
+            torch.zeros(1, conditionals[0].shape[1], dtype=dtype).to(dev),
         ], dim=0)
 
         new_mm_kwargs = MultiModalKwargs.from_items([
@@ -262,6 +264,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         return output
 
     def get_input_embeddings(self, input_ids: torch.Tensor, multimodal_embeddings: Optional[Sequence[torch.Tensor]] = None) -> torch.Tensor:
+        dtype = self.speech_emb.weight.dtype
         if multimodal_embeddings is None or len(multimodal_embeddings) == 0:
             embeds = self.speech_emb(input_ids - SPEECH_TOKEN_OFFSET)
             return torch.cat([embeds, embeds], dim=1)
@@ -310,7 +313,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     uncond_embeds = torch.cat([torch.zeros_like(text_emb), start_of_speech_emb], dim=0)
                     out.append(torch.cat([cond_embeds, uncond_embeds], dim=1))
             else:
-                out.append(torch.zeros(len(ids), self.dim * 2, device=ids.device))
+                out.append(torch.zeros(len(ids), self.dim * 2, dtype=dtype, device=ids.device))
         return torch.cat(out, dim=0)
 
     def compute_logits(self, hidden_states: torch.Tensor, sampling_metadata: SamplingMetadata) -> torch.Tensor:
@@ -323,14 +326,12 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
     def forward(self, input_ids: Optional[torch.Tensor] = None, positions: Optional[torch.Tensor] = None, 
                 intermediate_tensors: Optional[IntermediateTensors] = None, inputs_embeds: Optional[torch.Tensor] = None, **kwargs):
-        # Catch all vLLM arguments in **kwargs but ONLY pass what tfmr (LlamaModel) is known to support in this Colab env
         if inputs_embeds is None:
             mm_data = self.get_multimodal_embeddings(**kwargs)
             inputs_embeds = self.get_input_embeddings(input_ids, mm_data)
 
         cond_embeds, uncond_embeds = inputs_embeds.split([self.dim, self.dim], dim=1)
         
-        # Aligned exactly with the reference repo's proven call site
         hidden_states = self.tfmr(
             input_ids=None,
             positions=torch.cat([positions, positions], dim=0),
