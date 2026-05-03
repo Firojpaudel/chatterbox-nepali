@@ -326,7 +326,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         )
         self.logits_processor = LogitsProcessor(self.t3conf.speech_tokens_dict_size)
 
-        self.cfg_scale = float(os.environ.get("CHATTERBOX_CFG_SCALE", "0.5"))
+        self.cfg_scale = float(os.environ.get("CHATTERBOX_CFG_SCALE", "1.5"))
         print("Applying CFG scale:", self.cfg_scale)
 
 
@@ -419,142 +419,89 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
     def split_prefill_decode(
         self,
         input_ids: torch.Tensor,
-        multimodal_embeddings: list[MultiModalEmbeddings],
-    ) -> list[torch.Tensor, Optional[MultiModalEmbeddings]]:
-        """
-        vLLM combines the prefill and decode into a single input tensor. We need to split them back
-        out, and match the decode parts with the corresponding multimodal embeddings.
-
-        Because of the SPEECH_TOKEN_OFFSET, the prefill tokens will always be <SPEECH_TOKEN_OFFSET and
-        and the decode tokens will always be >= SPEECH_TOKEN_OFFSET.
-
-        Furthermore, the prefill always starts with PREFILL_COND_START_TOKEN, and
-        ends with PREFILL_END_TOKEN. However, vLLM can split the prefill across multiple batches,
-        so we won't always have the complete prefill block in a single batch - we might only have the
-        beginning or the end of a block.
-
-        We can see back-to-back prefill blocks, so we can't just look for continuous sequences of
-        prefill tokens. This nuance is not relevant for decode tokens as their position does not matter.
-
-        Returns a list of tuples, where the first element is the input IDs for the block,
-        and the second element is the associated multimodal embedding if the block is a decode part.
-        If the block is a prefill part, the second element is None.
-        """
-
+        multimodal_embeddings: list[torch.Tensor],
+        positions: torch.Tensor,
+    ) -> list[tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor]]:
         if len(input_ids) == 0:
             return []
         
-        # If there are no multimodal embeddings, we are in a pure prefill (e.g. dummy run)
-        if not multimodal_embeddings:
-            return [(input_ids, None)]
-
-        remaining_multimodal_embeddings = torch.cat(multimodal_embeddings, dim=0)
-
-        # with open("/ram/input_ids.txt", "w") as f:
-        #     f.write(str(input_ids.tolist()))
-        # with open("/ram/multimodal_embeddings.txt", "w") as f:
-        #     f.write(str([i.tolist() for i in (multimodal_embeddings or [])]))
+        remaining_multimodal_embeddings = torch.cat(multimodal_embeddings, dim=0) if multimodal_embeddings else None
 
         in_prefill_block = input_ids[0] < SPEECH_TOKEN_OFFSET
-
         output = []
+        id_buffer = []
+        pos_buffer = []
 
-        # Keep a buffer of current tokens
-        buffer = []
-
-        # Iterate through the element and if we hit block header, set the block state to true
-        # Else if we hit the block footer, set block state to false
-        # Every time we swtich between block states, add the current buffer to the output if not empty
-        # If we we switch out of block mode, add the multimodal embedding
-        for input_id in input_ids:
-            # Check if we've swapped between prefill and decode blocks, or if we've just hit the start of a new prefill block
+        for input_id, pos in zip(input_ids, positions):
             if (in_prefill_block != (input_id < SPEECH_TOKEN_OFFSET)) or (input_id == PREFILL_COND_START_TOKEN):
-                if buffer:
+                if id_buffer:
+                    cur_ids = torch.stack(id_buffer).to(input_ids.device)
+                    cur_pos = torch.stack(pos_buffer).to(input_ids.device)
                     if in_prefill_block:
-                        # assert len(remaining_multimodal_embeddings) >= len(buffer), "Not enough remaining multimodal embeddings"
                         mme, remaining_multimodal_embeddings = remaining_multimodal_embeddings\
-                            .split([len(buffer), len(remaining_multimodal_embeddings) - len(buffer)], dim=0)
-                        output.append((torch.tensor(buffer).to(input_ids.device), mme))
+                            .split([len(id_buffer), len(remaining_multimodal_embeddings) - len(id_buffer)], dim=0)
+                        output.append((cur_ids, mme, cur_pos))
                     else:
-                        output.append((torch.tensor(buffer).to(input_ids.device), None))
+                        output.append((cur_ids, None, cur_pos))
 
-                buffer = []
+                id_buffer = []
+                pos_buffer = []
                 in_prefill_block = (input_id < SPEECH_TOKEN_OFFSET)
 
-            # Add new token to buffer
-            buffer.append(input_id)
+            id_buffer.append(input_id)
+            pos_buffer.append(pos)
 
-        # Add any elements left in the buffer
-        if buffer:
-            if in_prefill_block:
-                # assert len(remaining_multimodal_embeddings) >= len(buffer), "Not enough remaining multimodal embeddings"
+        if id_buffer:
+            cur_ids = torch.stack(id_buffer).to(input_ids.device)
+            cur_pos = torch.stack(pos_buffer).to(input_ids.device)
+            if in_prefill_block and remaining_multimodal_embeddings is not None:
                 mme, remaining_multimodal_embeddings = remaining_multimodal_embeddings\
-                    .split([len(buffer), len(remaining_multimodal_embeddings) - len(buffer)], dim=0)
-                output.append((torch.tensor(buffer).to(input_ids.device), mme))
+                    .split([len(id_buffer), len(remaining_multimodal_embeddings) - len(id_buffer)], dim=0)
+                output.append((cur_ids, mme, cur_pos))
             else:
-                output.append((torch.tensor(buffer).to(input_ids.device), None))
+                output.append((cur_ids, None, cur_pos))
 
-        # if len(remaining_multimodal_embeddings) > 0:
-        #     print("t3/split_prefill_decode/input_ids", input_ids)
-        #     print("t3/split_prefill_decode/remaining_multimodal_embeddings", remaining_multimodal_embeddings.shape)
-        #     print("t3/split_prefill_decode/multimodal_embeddings", [i.shape for i in (multimodal_embeddings or [])])
-        # assert len(remaining_multimodal_embeddings) == 0, "Number of multimodal embeddings does not match number of prefill blocks"
-
-        # assert sum(len(i[0]) for i in output) == len(input_ids), "Number of output elements does not match number of input elements"
         return output
 
 
     def get_input_embeddings(self, input_ids: torch.Tensor, multimodal_embeddings: list[MultiModalEmbeddings], positions: Optional[torch.Tensor] = None) -> torch.Tensor:
         # HACK: vLLM dummy runs pass token IDs of all 0s for profiling.
-        # We catch this early to avoid crashing on empty multimodal data or invalid offsets.
         if input_ids is not None and torch.all(input_ids == 0):
              return torch.zeros((len(input_ids), self.dim * 2), 
-                               dtype=self.speech_head.weight.dtype, 
-                               device=input_ids.device)
+                                dtype=self.speech_head.weight.dtype, 
+                                device=input_ids.device)
 
         if input_ids is not None and (input_ids >= SPEECH_TOKEN_OFFSET).any():
             if multimodal_embeddings is None or len(multimodal_embeddings) == 0:
-                # There's no multimodal embeddings, so we're decoding.
-                # Remember to undo the offset we applied to the speech tokens.
-                # HACK: vLLM dummy runs pass token IDs of 0 for decode profiling, which results in negative indices.
                 speech_ids = torch.clamp(input_ids - SPEECH_TOKEN_OFFSET, min=0)
                 embeds = self.speech_emb(speech_ids)
-                
-                # Estimate the speech position. In vLLM, positions is the absolute index in the context.
-                # We add the learned speech positional embedding to match the original model's training distribution.
-                # Note: This is a heuristic as we don't know the exact text length here, but even a close 
-                # absolute position is better than zero/missing for the T3 architecture.
                 pos_indices = positions.clamp(0, self.t3conf.max_speech_tokens + 3)
-                
-                # DEBUG: Log decode embeddings
-                if getattr(self, '_log_decode', 0) < 5:
-                    print(f"DEBUG: get_input_embeddings (Decode) - ids: {input_ids.tolist()}, pos: {pos_indices.tolist()}")
-                    self._log_decode = getattr(self, '_log_decode', 0) + 1
-
                 embeds = embeds + self.precomputed_speech_pos_emb[pos_indices]
-
                 out = torch.cat([embeds, embeds], dim=1)
                 return out
         else:
-            # print("t3/get_input_embeddings/multimodal_embeddings", len(multimodal_embeddings))
-            # print("t3/get_input_embeddings/input_ids", input_ids.shape, input_ids.dtype, input_ids)
-            # print("t3/get_input_embeddings/multimodal_embeddings", [i.shape for i in (multimodal_embeddings or [])])
-
             out = []
-            for ids, multimodal_embedding in self.split_prefill_decode(input_ids, multimodal_embeddings):
-                # print("t3/get_input_embeddings/ids", ids.shape, ids.dtype, ids)
-                # print("t3/get_input_embeddings/multimodal_embedding", multimodal_embedding.shape if multimodal_embedding is not None else None)
-
+            for ids, multimodal_embedding, block_positions in self.split_prefill_decode(input_ids, multimodal_embeddings, positions):
                 if multimodal_embedding is None:
-                    # There's no multimodal embeddings, so we're decoding.
-                    # HACK: vLLM dummy runs pass token IDs of 0 for decode profiling, which results in negative indices.
-                    speech_ids = torch.clamp(ids - SPEECH_TOKEN_OFFSET, min=0)
-                    embeds = self.speech_emb(speech_ids)
-                    final_embeds = torch.cat([embeds, embeds], dim=1)
-                    # assert len(final_embeds) == len(ids), "Number of output elements does not match number of input elements"
-                    
-                    out.append(final_embeds)
-                    continue
+                    if (ids < SPEECH_TOKEN_OFFSET).any():
+                        text_ids = ids
+                        pos_indices = block_positions.clamp(0, self.t3conf.max_text_tokens - 1)
+                        text_emb = self.text_emb(text_ids) + self.precomputed_text_pos_emb[pos_indices]
+                        
+                        cond_embeds = text_emb
+                        uncond_embeds = torch.zeros_like(text_emb)
+                        
+                        final_embeds = torch.cat([cond_embeds, uncond_embeds], dim=1)
+                        out.append(final_embeds)
+                        continue
+                    else:
+                        speech_ids = torch.clamp(ids - SPEECH_TOKEN_OFFSET, min=0)
+                        embeds = self.speech_emb(speech_ids)
+                        pos_indices = block_positions.clamp(0, self.t3conf.max_speech_tokens + 3)
+                        embeds = embeds + self.precomputed_speech_pos_emb[pos_indices]
+                        final_embeds = torch.cat([embeds, embeds], dim=1)
+                        out.append(final_embeds)
+                        continue
 
                 # We're in the prefill stage, and need to wrangle the multimodal embeddings into the right format.
                 # Embeddings are in the format of <| cond | text | speech |>
