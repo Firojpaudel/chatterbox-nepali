@@ -60,7 +60,8 @@ class T3MultiModalDummyInputsBuilder(BaseDummyInputsBuilder):
         return "[START]Hello![STOP]"
 
     def get_dummy_mm_data(self, seq_len: int, mm_counts: Mapping[str, int]) -> MultiModalDataDict:
-        return { "conditionals": [torch.zeros(CONDITIONING_SIZE, 1024)] * mm_counts["conditionals"] }
+        # Use float16 for dummy data to match vLLM expected dtype
+        return { "conditionals": [torch.zeros(CONDITIONING_SIZE, 1024, dtype=torch.float16)] * mm_counts["conditionals"] }
 
 
 class T3MultiModalDataParser(MultiModalDataParser):
@@ -222,8 +223,10 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         loaded_params.update('tfmr.' + i for i in llama_loaded)
 
         dev = self.speech_emb.weight.device
-        self.precomputed_text_pos_emb = self.text_pos_emb.get_fixed_embedding(torch.arange(self.t3conf.max_text_tokens + 2, device=dev))[0]
-        self.precomputed_speech_pos_emb = self.speech_pos_emb.get_fixed_embedding(torch.arange(self.t3conf.max_speech_tokens + 4, device=dev))[0]
+        dtype = self.speech_emb.weight.dtype
+        # Ensure precomputed embeddings match model dtype
+        self.precomputed_text_pos_emb = self.text_pos_emb.get_fixed_embedding(torch.arange(self.t3conf.max_text_tokens + 2, device=dev))[0].to(dtype)
+        self.precomputed_speech_pos_emb = self.speech_pos_emb.get_fixed_embedding(torch.arange(self.t3conf.max_speech_tokens + 4, device=dev))[0].to(dtype)
         return loaded_params
 
     def get_multimodal_embeddings(self, **kwargs: object) -> Optional[MultiModalEmbeddings]:
@@ -268,9 +271,12 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         if multimodal_embeddings is None or len(multimodal_embeddings) == 0:
             embeds = self.speech_emb(input_ids - SPEECH_TOKEN_OFFSET)
             return torch.cat([embeds, embeds], dim=1)
+        
+        # Cast multimodal embeddings to match model dtype immediately
+        mm_casted = [mm.to(dtype) for mm in multimodal_embeddings]
             
         out = []
-        for ids, mme in self.split_prefill_decode(input_ids, multimodal_embeddings):
+        for ids, mme in self.split_prefill_decode(input_ids, mm_casted):
             if mme is None:
                 embeds = self.speech_emb(ids - SPEECH_TOKEN_OFFSET)
                 out.append(torch.cat([embeds, embeds], dim=1))
