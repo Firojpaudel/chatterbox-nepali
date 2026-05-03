@@ -24,11 +24,13 @@ class T3Config:
         self.rope_theta = kwargs.get("rope_theta", 10000.0)
         self.max_position_embeddings = kwargs.get("max_position_embeddings", 1000)
         
-        # Missing fields for CondEnc
+        # COMPLETE FIELD SET for CondEnc & Components
         self.encoder_type = "voice_encoder"
         self.n_conditioning_tokens = 34
         self.conditioning_dim = 1024
         self.n_audio_tokens = 1
+        self.speaker_embed_size = 256
+        self.text_embed_size = 1024
         self.hf_config = None
 
     @classmethod
