@@ -577,7 +577,10 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             rel_pos = (positions - prompt_len).clamp(min=0)
             embeds = embeds + self.precomputed_speech_pos_emb[rel_pos]
             
-            out = torch.cat([embeds, embeds], dim=1)
+            # Interleave into 4096-dim space
+            out = torch.zeros((len(embeds), self.dim), dtype=embeds.dtype, device=embeds.device)
+            out[:, 0:1024] = embeds[:, 0:1024]
+            out[:, 1024:2048] = embeds[:, 1024:2048]
             return out
         else:
             out = []
@@ -591,7 +594,9 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                         cond_embeds = text_emb
                         uncond_embeds = torch.zeros_like(text_emb)
                         
-                        final_embeds = torch.cat([cond_embeds, uncond_embeds], dim=1)
+                        final_embeds = torch.zeros((len(cond_embeds), self.dim), dtype=cond_embeds.dtype, device=cond_embeds.device)
+                        final_embeds[:, 0:1024] = cond_embeds[:, 0:1024]
+                        final_embeds[:, 1024:2048] = uncond_embeds[:, 1024:2048]
                         out.append(final_embeds)
                         continue
                     else:
@@ -599,7 +604,9 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                         embeds = self.speech_emb(speech_ids)
                         pos_indices = block_positions.clamp(0, self.t3conf.max_speech_tokens + 3)
                         embeds = embeds + self.precomputed_speech_pos_emb[pos_indices]
-                        final_embeds = torch.cat([embeds, embeds], dim=1)
+                        final_embeds = torch.zeros((len(embeds), self.dim), dtype=embeds.dtype, device=embeds.device)
+                        final_embeds[:, 0:1024] = embeds[:, 0:1024]
+                        final_embeds[:, 1024:2048] = embeds[:, 1024:2048]
                         out.append(final_embeds)
                         continue
 
@@ -639,8 +646,10 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     uncond_text_emb = self.precomputed_text_pos_emb[0:len(text_ids)]
                     uncond_embeds = torch.cat([start_token_emb, conditioning_emb, uncond_text_emb, start_of_speech_emb], dim=0)
 
-                    # Concatenate into one giant tensor, which will be split in the forward pass
-                    final_embeds = torch.cat([cond_embeds, uncond_embeds], dim=1)
+                    # Interleave into 4096-dim space for perfect isolation
+                    final_embeds = torch.zeros((len(cond_embeds), self.dim), dtype=cond_embeds.dtype, device=cond_embeds.device)
+                    final_embeds[:, 0:1024] = cond_embeds[:, 0:1024]
+                    final_embeds[:, 1024:2048] = uncond_embeds[:, 1024:2048]
                     
                     # Store prompt length for decoding stage positional alignment
                     if req_key is not None:
@@ -829,12 +838,12 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         kwargs.pop("conditionals", None)
         kwargs.pop("multimodal_embeddings", None)
 
-        # We process the 2048-dim embeddings through our expanded 2048-dim backbone natively!
+        # We process the 4096-dim embeddings through our expanded 4096-dim backbone natively!
         hidden_states = self.tfmr(
             input_ids=None,
             positions=positions, # Native sequence length, no batch duplication hack!
             intermediate_tensors=intermediate_tensors,
-            inputs_embeds=inputs_embeds, # [N, 2048]
+            inputs_embeds=inputs_embeds, # [N, 4096]
             **kwargs
         )
         
