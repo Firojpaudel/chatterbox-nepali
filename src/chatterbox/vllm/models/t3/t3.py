@@ -1,8 +1,8 @@
 from typing import Iterable, Mapping, Optional, Sequence, Union, Tuple, Any
-import os
 import torch
 import torch.nn as nn
 import random
+import os
 from transformers.feature_extraction_utils import BatchFeature
 
 from vllm.config import VllmConfig, ModelConfig
@@ -157,7 +157,6 @@ class T3MultiModalProcessor(BaseMultiModalProcessor[T3ProcessingInfo]):
 class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str):
         super().__init__()
-        # Tricking vLLM to allocate double state for CFG
         vllm_config.model_config.hf_config.hidden_size = 1024
         self.vllm_config = vllm_config
         self.cfg: ModelConfig = vllm_config.model_config
@@ -183,7 +182,6 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         )
         self.logits_processor = LogitsProcessor(self.t3conf.speech_tokens_dict_size)
         self.cfg_scale = float(os.environ.get("CHATTERBOX_CFG_SCALE", "0.8"))
-        self.SAFE_MODE = os.environ.get("CHATTERBOX_SAFE_MODE", "False") == "True"
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         loaded_params: set[str] = set()
@@ -197,7 +195,6 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             "input_layernorm.weight", "post_attention_layernorm.weight"
         }
 
-        print("--- T3 Weight Loading Started ---")
         for raw_name, weight in weights:
             name = raw_name
             if "tfmr." in name:
@@ -321,16 +318,21 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         padding = torch.full((logits.shape[0], SPEECH_TOKEN_OFFSET), float('-inf'), dtype=logits.dtype, device=logits.device)
         return torch.cat([padding, logits], dim=1)
 
-    def forward(self, input_ids, positions, kv_caches, attn_metadata, intermediate_tensors=None, inputs_embeds=None, **kwargs):
+    def forward(self, input_ids: Optional[torch.Tensor] = None, positions: Optional[torch.Tensor] = None, 
+                intermediate_tensors: Optional[IntermediateTensors] = None, inputs_embeds: Optional[torch.Tensor] = None, **kwargs):
+        # Ultra-robust signature that catches all vLLM arguments (including kv_caches and attn_metadata) in **kwargs
+        kv_caches = kwargs.get('kv_caches')
+        attn_metadata = kwargs.get('attn_metadata')
+
         if inputs_embeds is None:
-            # Reconstruct inputs_embeds using provided kwargs (which contain 'conditionals')
             mm_data = self.get_multimodal_embeddings(**kwargs)
             inputs_embeds = self.get_input_embeddings(input_ids, mm_data)
 
         cond_embeds, uncond_embeds = inputs_embeds.split([self.dim, self.dim], dim=1)
         hidden_states = self.tfmr(input_ids=None, positions=torch.cat([positions, positions], dim=0),
                                  kv_caches=kv_caches, attn_metadata=attn_metadata,
-                                 intermediate_tensors=None, inputs_embeds=torch.cat([cond_embeds, uncond_embeds], dim=0))
+                                 intermediate_tensors=intermediate_tensors, 
+                                 inputs_embeds=torch.cat([cond_embeds, uncond_embeds], dim=0))
         
         h1, h2 = hidden_states.split([len(cond_embeds), len(uncond_embeds)], dim=0)
         return torch.cat([h1, h2], dim=1)

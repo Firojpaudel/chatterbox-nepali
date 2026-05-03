@@ -380,14 +380,14 @@ with gr.Blocks(title="Chatterbox Nepali TTS", css=CUSTOM_CSS) as demo:
             )
             model_status = gr.Markdown(f"**Status:** `Active: nepali-merged`")
             
-            exaggeration = gr.Slider(0.0, 3.0, value=0.0, step=0.1, label="Exaggeration")
-            cfg_weight = gr.Slider(0.0, 3.0, value=0.8, step=0.1, label="CFG (Pace)")
+            exaggeration = gr.Slider(0.0, 1.0, value=0.0, step=0.01, label="Emotion Exaggeration")
+            cfg_weight = gr.Slider(0.0, 2.0, value=0.8, step=0.1, label="CFG Scale")
+            temperature = gr.Slider(0.0, 2.0, value=0.0, step=0.01, label="Temperature")
             
             with gr.Accordion("Advanced Options", open=False):
                 speed_slider = gr.Slider(0.5, 1.5, step=0.05, value=1.0, label="Speed")
-                temp = gr.Slider(0.05, 2.0, step=0.05, label="Temperature", value=0.8)
-                top_p = gr.Slider(0.0, 1.0, step=0.05, label="Top P", value=1.0)
-                min_p = gr.Slider(0.0, 1.0, step=0.01, label="Min P", value=0.05)
+                top_p = gr.Slider(0.0, 1.0, step=0.05, value=1.0, label="Top P")
+                min_p = gr.Slider(0.0, 1.0, step=0.01, value=0.05, label="Min P")
                 repetition_penalty = gr.Slider(1.0, 5.0, step=0.1, label="Repetition Penalty", value=2.0)
                 seed_num = gr.Number(value=0, label="Seed")
 
@@ -413,7 +413,7 @@ with gr.Blocks(title="Chatterbox Nepali TTS", css=CUSTOM_CSS) as demo:
     model_selector.change(fn=switch_model, inputs=[model_selector], outputs=[model_status])
     run_btn.click(
         fn=generate_tts_audio,
-        inputs=[text, language_id, ref_dropdown, ref_wav, exaggeration, cfg_weight, temp, seed_num, enable_sanitizer, enable_chunking, enable_protection, speed_slider, repetition_penalty, top_p, min_p, use_vllm],
+        inputs=[text, language_id, ref_dropdown, ref_wav, exaggeration, cfg_weight, temperature, seed_num, enable_sanitizer, enable_chunking, enable_protection, speed_slider, repetition_penalty, top_p, min_p, use_vllm],
         outputs=[audio_output]
     )
 

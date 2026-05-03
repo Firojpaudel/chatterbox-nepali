@@ -506,12 +506,12 @@ class ChatterboxTTS:
         prompts: Union[str, list[str]],
         audio_prompt_path: Optional[str] = None,
         language_id: Optional[str] = 'en',
-        exaggeration: float = 0.5,
-        temperature: float = 0.8,
+        exaggeration: float = 0.0,
+        temperature: float = 0.0,
         max_tokens=1000, # Capped at max_model_len
 
         # From original Chatterbox HF generation args
-        top_p=0.8,
+        top_p=1.0,
         repetition_penalty=2.0,
 
         # Supports anything in https://docs.vllm.ai/en/v0.9.2/api/vllm/index.html?h=samplingparams#vllm.SamplingParams
@@ -538,8 +538,8 @@ class ChatterboxTTS:
         s3gen_ref: dict[str, Any],
         cond_emb: torch.Tensor,
         language_id: Optional[str] = 'en',
-        temperature: float = 0.8,
-        exaggeration: float = 0.5,
+        temperature: float = 0.0,
+        exaggeration: float = 0.0,
         max_tokens=1000, # Capped at max_model_len
 
         # Number of diffusion steps to use for S3Gen
