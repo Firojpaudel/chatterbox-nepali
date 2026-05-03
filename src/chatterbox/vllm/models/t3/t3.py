@@ -449,6 +449,10 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         if len(input_ids) == 0:
             return []
         
+        # If there are no multimodal embeddings, we are in a pure prefill (e.g. dummy run)
+        if not multimodal_embeddings:
+            return [(input_ids, None)]
+
         remaining_multimodal_embeddings = torch.cat(multimodal_embeddings, dim=0)
 
         # with open("/ram/input_ids.txt", "w") as f:
@@ -506,6 +510,13 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
 
     def get_input_embeddings(self, input_ids: torch.Tensor, multimodal_embeddings: list[MultiModalEmbeddings], positions: Optional[torch.Tensor] = None) -> torch.Tensor:
+        # HACK: vLLM dummy runs pass token IDs of all 0s for profiling.
+        # We catch this early to avoid crashing on empty multimodal data or invalid offsets.
+        if input_ids is not None and torch.all(input_ids == 0):
+             return torch.zeros((len(input_ids), self.dim * 2), 
+                               dtype=self.speech_head.weight.dtype, 
+                               device=input_ids.device)
+
         if input_ids is not None and (input_ids >= SPEECH_TOKEN_OFFSET).any():
             if multimodal_embeddings is None or len(multimodal_embeddings) == 0:
                 # There's no multimodal embeddings, so we're decoding.
