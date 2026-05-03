@@ -307,7 +307,8 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             layer.post_attention_layernorm = BlockDiagonalRMSNorm(layer.post_attention_layernorm)
         self.tfmr.norm = BlockDiagonalRMSNorm(self.tfmr.norm)
 
-        self.cfg_scale = self.vllm_config.model_config.hf_config.cfg_scale
+        self.cfg_scale = float(os.environ.get("CHATTERBOX_CFG_SCALE", "0.5"))
+        print("Applying CFG scale:", self.cfg_scale)
 
         # Initialize custom components
         is_multilingual = getattr(self.cfg.hf_config, 'is_multilingual', False)
