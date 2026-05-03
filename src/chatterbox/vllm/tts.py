@@ -10,8 +10,37 @@ def _new_register(model_type, config, exist_ok=False):
     return _original_register(model_type, config, exist_ok=True)
 AutoConfig.register = _new_register
 
+def _patch_vllm_on_disk():
+    """Surgery: Permanently fix the vLLM 'aimv2' bug by patching the source code on disk."""
+    import os
+    import importlib.util
+    try:
+        spec = importlib.util.find_spec("vllm")
+        if spec is None or spec.origin is None:
+            return
+        vllm_dir = os.path.dirname(spec.origin)
+        ovis_path = os.path.join(vllm_dir, "transformers_utils", "configs", "ovis.py")
+        
+        if os.path.exists(ovis_path):
+            with open(ovis_path, "r") as f:
+                content = f.read()
+            
+            # The line causing the subprocess to crash
+            old_line = 'AutoConfig.register("aimv2", AIMv2Config)'
+            new_line = 'AutoConfig.register("aimv2", AIMv2Config, exist_ok=True)'
+            
+            if old_line in content and new_line not in content:
+                print(f"🩹 Applying permanent patch to vLLM at: {ovis_path}")
+                with open(ovis_path, "w") as f:
+                    f.write(content.replace(old_line, new_line))
+                print("✅ vLLM background process bug fixed!")
+    except Exception as e:
+        print(f"⚠️ Failed to apply permanent vLLM patch: {e}")
+
+_patch_vllm_on_disk()
+
 # Register ChatterboxT3 architecture so transformers recognizes it
-from transformers import LlamaConfig
+from transformers import LlamaConfig, AutoConfig
 class ChatterboxT3Config(LlamaConfig):
     model_type = "ChatterboxT3"
 
