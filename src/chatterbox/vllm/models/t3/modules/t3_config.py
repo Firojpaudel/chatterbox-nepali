@@ -16,11 +16,11 @@ class T3Config:
     def __init__(self, **kwargs):
         # Native T3 dimension is 1024. 
         # The vLLM backbone will be 2048, but the internal components are 1024.
-        self.n_channels = 1024 
-        self.intermediate_size = 4096
-        self.n_heads = 16
+        self.n_channels = 2048
+        self.intermediate_size = 8192
+        self.n_heads = 32
         self.n_layers = 30
-        self.n_kv_heads = 16
+        self.n_kv_heads = 32
         self.rms_norm_eps = 1e-05
         self.vocab_size = 32000
         self.rope_theta = 500000.0
@@ -46,7 +46,7 @@ class T3Config:
         self.emotion_adv = True
         self.use_perceiver_resampler = True
         self.n_conditioning_tokens = 34
-        self.conditioning_dim = 1024
+        self.conditioning_dim = 2048
         self.n_audio_tokens = 1
         self.speech_cond_prompt_len = 32
         self.hf_config = None

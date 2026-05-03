@@ -75,7 +75,11 @@ class T3CondEnc(nn.Module):
         # perceiver resampler
         self.perceiver = None
         if hp.use_perceiver_resampler:
-            self.perceiver = Perceiver()
+            self.perceiver = Perceiver(
+                pre_attention_query_size=hp.n_channels,
+                embedding_dim=hp.n_channels,
+                num_attn_heads=hp.n_heads
+            )
 
     def forward(self, cond: T3Cond):
         # Validate
