@@ -192,31 +192,40 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         state_dicts = {}
         hf_llama_weights = {}
         
-        expected_shapes = {n: p.shape for n, p in self.tfmr.named_parameters()}
-        print("\n--- T3 GQA SHAPE DIAGNOSTIC ---")
-
         for raw_name, weight in weights:
             name = raw_name
             if "tfmr." in name:
                 subname = name[name.find("tfmr.")+5:]
-                orig_shape = weight.shape
                 
                 # Expand weights
                 if "qkv_proj.weight" in subname:
-                    # DIAGNOSTIC: How many heads are in this weight?
-                    print(f"DEBUG: qkv_proj.weight raw shape: {orig_shape}")
-                    # Proportional split assuming 1024 hidden
-                    # Standard MHA: 3072 (1024+1024+1024)
-                    # GQA 2:1: 1536 (1024+256+256) ?
-                    try:
-                        q, k, v = weight.chunk(3, dim=0) # MHA fallback
-                        new_q = torch.block_diag(q, q)
-                        new_k = torch.block_diag(k, k)
-                        new_v = torch.block_diag(v, v)
-                        weight = torch.cat([new_q, new_k, new_v], dim=0)
-                    except Exception as e:
-                        print(f"FAILED TO CHUNK QKV: {subname} | Shape: {orig_shape}")
-                        raise e
+                    # Robust GQA Splitting
+                    # weight shape is [q_heads + 2*kv_heads * head_dim, hidden_size]
+                    # We assume hidden_size=1024 and head_dim=64 for this model
+                    hidden_size = weight.shape[1]
+                    head_dim = 64
+                    total_heads_in_weight = weight.shape[0] // head_dim
+                    # In GQA: total_heads = num_heads + 2 * num_kv_heads
+                    # If total_heads is 32 and num_heads is 16, then num_kv_heads is 8. (Ratio 2:1)
+                    # We can solve: total_heads = num_heads + 2 * num_kv_heads
+                    # Usually num_heads is a multiple of num_kv_heads (e.g. 4x or 2x)
+                    # Let num_heads = R * num_kv_heads. Then total = (R+2) * num_kv_heads.
+                    # For most models: R=4 (Llama-3-8B) or R=1 (Llama-2-7B).
+                    if total_heads_in_weight == 48: # Llama-3 style? (32 + 8 + 8) -> Ratio 4:1
+                        q_heads, kv_heads = 32, 8
+                    elif total_heads_in_weight == 24: # Ratio 4:1 with 16 heads
+                        q_heads, kv_heads = 16, 4
+                    elif total_heads_in_weight == 32: # Ratio 2:1 with 16 heads
+                        q_heads, kv_heads = 16, 8
+                    else: # Fallback to MHA (Ratio 1:1)
+                        q_heads = kv_heads = total_heads_in_weight // 3
+
+                    q, k, v = weight.split([q_heads * head_dim, kv_heads * head_dim, kv_heads * head_dim], dim=0)
+                    new_q = torch.block_diag(q, q)
+                    new_k = torch.block_diag(k, k)
+                    new_v = torch.block_diag(v, v)
+                    weight = torch.cat([new_q, new_k, new_v], dim=0)
+
                 elif any(x in subname for x in ["o_proj.weight", "gate_proj.weight", "up_proj.weight", "down_proj.weight"]):
                     weight = torch.block_diag(weight, weight)
                 elif "embed_tokens.weight" in subname:
@@ -227,11 +236,6 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 elif "norm.weight" in subname:
                     weight = torch.cat([weight, weight], dim=0)
 
-                if subname in expected_shapes:
-                    exp = expected_shapes[subname]
-                    if weight.shape != exp:
-                        print(f"MISMATCH: {subname} | LoadedExpanded: {weight.shape} | EngineExpected: {exp}")
-                
                 hf_llama_weights[subname] = weight
                 continue
             
