@@ -333,22 +333,24 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             mm_data = self.get_multimodal_embeddings(**kwargs)
             inputs_embeds = self.get_input_embeddings(input_ids, mm_data)
 
-        # Reference repo strategy:
-        # 1. Inputs arrive as [N, 2048] (cat along dim=1)
-        # 2. Split them into [N, 1024] and [N, 1024]
-        # 3. Concatenate along batch dimension (dim=0) to [2N, 1024]
-        # 4. Double positions to [2N]
-        # 5. Call backbone, then split and re-concatenate along dim=1
+        # Split the [N, 2048] embeddings into two [N, 1024] streams
         cond_embeds, uncond_embeds = inputs_embeds.split([self.dim, self.dim], dim=1)
         
+        # Doubling the batch length (dim=0) and doubling positions
         doubled_positions = torch.cat([positions, positions], dim=0).long().contiguous()
         doubled_embeds = torch.cat([cond_embeds, uncond_embeds], dim=0).contiguous()
 
+        # CRITICAL: We MUST set intermediate_tensors=None and potentially bypass metadata checks
+        # when passing a doubled batch to a backbone that vLLM thinks is single-batch.
+        # We also pass **kwargs but we are careful about what vLLM might have added.
+        backbone_kwargs = {k: v for k, v in kwargs.items() if k not in ["intermediate_tensors", "attn_metadata", "sampling_metadata"]}
+        
         hidden_states = self.tfmr(
             input_ids=None,
             positions=doubled_positions,
-            intermediate_tensors=intermediate_tensors, 
-            inputs_embeds=doubled_embeds
+            intermediate_tensors=None, # Force re-derivation to avoid shape mismatch
+            inputs_embeds=doubled_embeds,
+            **backbone_kwargs
         )
         
         h_cond, h_uncond = hidden_states.split([len(cond_embeds), len(uncond_embeds)], dim=0)
