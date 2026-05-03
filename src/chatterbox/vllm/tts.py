@@ -44,6 +44,10 @@ _patch_vllm_on_disk()
 from vllm import LLM, SamplingParams
 from functools import lru_cache
 
+# Speech tokens are offset by 2560 to avoid overlap with text tokens (0-2454)
+MULTILINGUAL_SPEECH_TOKEN_OFFSET = 2560
+
+
 import librosa
 import torch
 import torch.nn.functional as F
