@@ -308,6 +308,8 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 hf_llama_weights[subname] = weight
                 continue
             loaded_params.add(name)
+            if '.' not in name:
+                continue
             attr, subname = name.split('.', 1)
             state_dict = state_dicts.get(attr, {})
             state_dict[subname] = weight
