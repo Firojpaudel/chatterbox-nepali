@@ -676,11 +676,11 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             residual = None
             for layer in self.tfmr.layers:
                 hidden_states, residual = layer(
-                    positions,
-                    hidden_states,
-                    residual,
-                    kv_caches,
-                    attn_metadata,
+                    positions=positions,
+                    hidden_states=hidden_states,
+                    residual=residual,
+                    kv_caches=kv_caches,
+                    attn_metadata=attn_metadata,
                 )
             hidden_states = self.tfmr.norm(hidden_states, residual)
             return hidden_states
