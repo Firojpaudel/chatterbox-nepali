@@ -332,6 +332,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        print(f"DEBUG: load_weights - self.dim: {self.dim}")
         loaded_params: set[str] = set()
         state_dicts = {}
         hf_llama_weights = {}
@@ -366,7 +367,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                         self._log_weights_count = getattr(self, '_log_weights_count', 0) + 1
 
                     # If either dimension is 1024, expand it to 2048
-                    if self.dim == 2048:
+                    if True: # Force check for 1024-dim weights regardless of self.dim
                         if w.dim() == 2:
                             if w.shape[1] == 1024:
                                 print(f"DEBUG: Expanding {attr}.{key} (dim 1) from 1024 to 2048")
