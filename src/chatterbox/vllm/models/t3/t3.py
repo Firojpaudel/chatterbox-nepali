@@ -298,7 +298,10 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
 
         # Initialize custom components
-        is_multilingual = getattr(self.cfg.hf_config, 'is_multilingual', False)
+        hf_cfg = vllm_config.model_config.hf_config
+        print(f"DEBUG: vLLM Internal Config - hidden_size: {hf_cfg.hidden_size}, num_heads: {hf_cfg.num_attention_heads}")
+        
+        is_multilingual = getattr(hf_cfg, 'is_multilingual', False)
 
         self.t3conf = T3Config.multilingual() if is_multilingual else T3Config()
         self.dim = self.t3conf.n_channels
@@ -682,6 +685,8 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         
         # DEBUG: Log raw hidden states for exact comparison
         if cond_hidden_states.numel() > 0:
+            diff = (cond_hidden_states - uncond_hidden_states).abs().max().item()
+            print(f"DEBUG: compute_logits - MAX STREAM DIFF: {diff:.8f}")
             print(f"DEBUG: RAW Cond Hidden[0, :5]: {cond_hidden_states[0, :5].detach().cpu().tolist()}")
             print(f"DEBUG: RAW Uncond Hidden[0, :5]: {uncond_hidden_states[0, :5].detach().cpu().tolist()}")
 

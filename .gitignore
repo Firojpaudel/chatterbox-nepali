@@ -75,3 +75,6 @@ interactive_tts.py
 test_forgetting.py
 test_nepali.py
 chatterbox-nepali-finetune.ipynb
+
+scratch/*
+debug_output.txt
