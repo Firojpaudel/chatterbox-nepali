@@ -9,7 +9,7 @@ T3_CONFIG = {
     "rms_norm_eps": 1e-05,
     "vocab_size": 32000,
     "rope_theta": 10000.0,
-    "max_position_embeddings": 5000,
+    "max_position_embeddings": 8192,
 }
 
 class T3Config:
@@ -24,14 +24,14 @@ class T3Config:
         self.rms_norm_eps = 1e-05
         self.vocab_size = 32000
         self.rope_theta = 10000.0
-        self.max_position_embeddings = 5000
+        self.max_position_embeddings = 8192
         
         # Tokenizer dict sizes
-        self.text_tokens_dict_size = 1024
+        self.text_tokens_dict_size = 2455
         self.speech_tokens_dict_size = 8194
         
         # Sequence lengths
-        self.max_text_tokens = 1024
+        self.max_text_tokens = 2048
         self.max_speech_tokens = 4096
 
         

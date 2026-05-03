@@ -108,7 +108,7 @@ MULTILINGUAL_VLLM_CONFIG = {
     "hidden_size": 2048,
     "initializer_range": 0.02,
     "intermediate_size": 8192,
-    "max_position_embeddings": 5000,
+    "max_position_embeddings": 8192,
     "mlp_bias": False,
     "model_type": "llama",
     "num_attention_heads": 32,
