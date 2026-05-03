@@ -160,17 +160,23 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str):
         super().__init__()
         # ARCHITECTURAL LANE DOUBLING (1024 -> 2048)
-        orig_hidden = vllm_config.model_config.hf_config.hidden_size
-        vllm_config.model_config.hf_config.hidden_size = orig_hidden * 2
-        if hasattr(vllm_config.model_config.hf_config, "intermediate_size"):
-            vllm_config.model_config.hf_config.intermediate_size *= 2
+        # We must double EVERYTHING related to heads and hidden dimensions 
+        # to ensure the Lane architecture is perfectly consistent across all kernels.
+        hf = vllm_config.model_config.hf_config
+        hf.hidden_size *= 2
+        if hasattr(hf, "intermediate_size"):
+            hf.intermediate_size *= 2
+        if hasattr(hf, "num_attention_heads"):
+            hf.num_attention_heads *= 2
+        if hasattr(hf, "num_key_value_heads"):
+            hf.num_key_value_heads *= 2
             
         self.vllm_config = vllm_config
         self.cfg: ModelConfig = vllm_config.model_config
 
         self.tfmr = LlamaModel(vllm_config=vllm_config, prefix=prefix + ".tfmr")
         
-        is_multilingual = getattr(self.cfg.hf_config, 'is_multilingual', True)
+        is_multilingual = getattr(hf, 'is_multilingual', True)
         self.t3conf = T3Config.multilingual() if is_multilingual else T3Config()
         
         self.dim = self.t3conf.n_channels
@@ -195,18 +201,12 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         state_dicts = {}
         hf_llama_weights = {}
         
-        # Diagnostic map to help identify expected shapes
-        expected_shapes = {}
-        for n, p in self.tfmr.named_parameters():
-            expected_shapes[n] = p.shape
-
-        print("--- T3 Weight Expansion Diagnostic ---")
         for raw_name, weight in weights:
             name = raw_name
             if "tfmr." in name:
                 subname = name[name.find("tfmr.")+5:]
                 
-                # Expand weights to match the doubled config
+                # Expand weights to match the doubled config (2x everything)
                 if "qkv_proj.weight" in subname:
                     q, k, v = weight.chunk(3, dim=0)
                     new_q = torch.block_diag(q, q)
@@ -223,12 +223,6 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 elif "norm.weight" in subname:
                     weight = torch.cat([weight, weight], dim=0)
 
-                # DIAGNOSTIC PRINT
-                if subname in expected_shapes:
-                    exp = expected_shapes[subname]
-                    if weight.shape != exp:
-                        print(f"SHAPE MISMATCH: {subname} | Loaded: {weight.shape} | Expected: {exp}")
-                
                 hf_llama_weights[subname] = weight
                 continue
             
