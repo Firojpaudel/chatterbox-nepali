@@ -2,56 +2,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union, Tuple, Any
 import time
-import json
-import shutil
-# Monkey-patch transformers to prevent vLLM from crashing on duplicate 'aimv2' registration
-import transformers
-from transformers.models.auto.configuration_auto import AutoConfig
-_original_register = AutoConfig.register
-def _new_register(model_type, config, exist_ok=False):
-    return _original_register(model_type, config, exist_ok=True)
-AutoConfig.register = _new_register
 
-def _patch_vllm_on_disk():
-    """Surgery: Permanently fix the vLLM 'aimv2' bug by patching the source code on disk."""
-    import os
-    import importlib.util
-    try:
-        spec = importlib.util.find_spec("vllm")
-        if spec is None or spec.origin is None:
-            return
-        vllm_dir = os.path.dirname(spec.origin)
-        ovis_path = os.path.join(vllm_dir, "transformers_utils", "configs", "ovis.py")
-        
-        if os.path.exists(ovis_path):
-            with open(ovis_path, "r") as f:
-                content = f.read()
-            
-            # The line causing the subprocess to crash
-            old_line = 'AutoConfig.register("aimv2", AIMv2Config)'
-            new_line = 'AutoConfig.register("aimv2", AIMv2Config, exist_ok=True)'
-            
-            if old_line in content and new_line not in content:
-                print(f"🩹 Applying permanent patch to vLLM at: {ovis_path}")
-                with open(ovis_path, "w") as f:
-                    f.write(content.replace(old_line, new_line))
-                print("✅ vLLM background process bug fixed!")
-    except Exception as e:
-        print(f"⚠️ Failed to apply permanent vLLM patch: {e}")
-
-_patch_vllm_on_disk()
-
-# Register ChatterboxT3 architecture so transformers recognizes it
-from transformers import LlamaConfig, AutoConfig
-class ChatterboxT3Config(LlamaConfig):
-    model_type = "ChatterboxT3"
-
-AutoConfig.register("ChatterboxT3", ChatterboxT3Config)
-
-from vllm import LLM, SamplingParams, ModelRegistry
-from .models.t3 import T3VllmModel
-ModelRegistry.register_model("T3VllmModel", T3VllmModel)
-
+from vllm import LLM, SamplingParams
 from functools import lru_cache
 
 import librosa
@@ -68,10 +20,9 @@ from .models.voice_encoder import VoiceEncoder
 from .models.t3 import SPEECH_TOKEN_OFFSET
 from .models.t3.modules.cond_enc import T3Cond, T3CondEnc
 from .models.t3.modules.learned_pos_emb import LearnedPositionEmbeddings
-from .text_utils import punc_norm, SUPPORTED_LANGUAGES
+from .text_utils import punc_norm
 
-REPO_ID = "Firoj112/chatterbox-nepali-runs"
-FALLBACK_REPO_ID = "ResembleAI/chatterbox"
+REPO_ID = "ResembleAI/chatterbox"
 
 @dataclass
 class Conditionals:
@@ -113,8 +64,7 @@ class ChatterboxTTS:
     def __init__(self, target_device: str, max_model_len: int,
                  t3: LLM, t3_config: T3Config, t3_cond_enc: T3CondEnc, 
                  t3_speech_emb: torch.nn.Embedding, t3_speech_pos_emb: LearnedPositionEmbeddings,
-                 s3gen: S3Gen, ve: VoiceEncoder, default_conds: Conditionals,
-                 variant: str = "english"):
+                 s3gen: S3Gen, ve: VoiceEncoder, default_conds: Conditionals):
         self.target_device = target_device
         self.max_model_len = max_model_len
         self.t3 = t3
@@ -126,7 +76,6 @@ class ChatterboxTTS:
         self.s3gen = s3gen
         self.ve = ve
         self.default_conds = default_conds
-        self.variant = variant
 
     @property
     def sr(self) -> int:
@@ -137,30 +86,16 @@ class ChatterboxTTS:
     def from_local(cls, ckpt_dir: str | Path, target_device: str = "cuda", 
                    max_model_len: int = 1000, compile: bool = False,
                    max_batch_size: int = 10,
-                   variant: str = "english",
-                   t3_weight_path: Optional[str | Path] = None,
+
+                   # Original Chatterbox defaults this to False. I don't see a substantial performance difference when running with FP16.
                    s3gen_use_fp16: bool = False,
                    **kwargs) -> 'ChatterboxTTS':
         ckpt_dir = Path(ckpt_dir)
+
         t3_config = T3Config()
 
-        # Resolve T3 weights (flexible format)
-        if t3_weight_path is None:
-            t3_weight_file = "t3_cfg.safetensors" if variant == "english" else "t3_mtl23ls_v2.safetensors"
-            if (ckpt_dir / "model.safetensors").exists():
-                t3_weight_path = ckpt_dir / "model.safetensors"
-            elif (ckpt_dir / "model.pt").exists():
-                t3_weight_path = ckpt_dir / "model.pt"
-            else:
-                t3_weight_path = ckpt_dir / t3_weight_file
-
-        print(f"Loading T3 conditional weights from: {t3_weight_path}")
-        if str(t3_weight_path).endswith(".safetensors"):
-            t3_weights = load_file(t3_weight_path)
-        else:
-            t3_weights = torch.load(t3_weight_path, map_location="cpu", weights_only=True)
-            # Clean keys if they come from a different training script
-            t3_weights = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in t3_weights.items()}
+        # Load *just* the necessary weights to perform inference with T3CondEnc
+        t3_weights = load_file(ckpt_dir / "t3_cfg.safetensors")
 
         t3_enc = T3CondEnc(t3_config)
         t3_enc.load_state_dict({ k.replace('cond_enc.', ''):v for k,v in t3_weights.items() if k.startswith('cond_enc.') })
@@ -174,40 +109,29 @@ class ChatterboxTTS:
         t3_speech_pos_emb.load_state_dict({ k.replace('speech_pos_emb.', ''):v for k,v in t3_weights.items() if k.startswith('speech_pos_emb.') })
         t3_speech_pos_emb = t3_speech_pos_emb.to(device=target_device).eval()
 
-        # Free the 2.14GB weights dictionary from System RAM before vLLM loads the model
-        del t3_weights
-        import gc; gc.collect()
-
-        # vLLM setup
         total_gpu_memory = torch.cuda.get_device_properties(0).total_memory
         unused_gpu_memory = total_gpu_memory - torch.cuda.memory_allocated()
+        
+        # Heuristic: rough calculation for what percentage of GPU memory to give to vLLM.
+        # Tune this until the 'Maximum concurrency for ___ tokens per request: ___x' is just over 1.
+        # This rough heuristic gives 1.55GB for the model weights plus 128KB per token.
         vllm_memory_needed = (1.55*1024*1024*1024) + (max_batch_size * max_model_len * 1024 * 128)
         vllm_memory_percent = vllm_memory_needed / unused_gpu_memory
-        # Ensure vLLM gets enough memory but NOT too much — s3gen (~1GB), ve, and
-        # inference working memory also need GPU space. On T4 (15GB):
-        #   0.40 * 14.56GB = 5.8GB for vLLM (1GB model + 4.8GB KV cache)
-        #   Leaves ~9GB for s3gen, audio decode, and working memory
-        vllm_memory_percent = max(vllm_memory_percent, 0.40)
-        
-        # We assume the model dir for vLLM is the same as ckpt_dir or contains the weights
-        # vLLM expects a directory with model.safetensors/config.json etc.
-        vllm_model_dir = str(ckpt_dir)
+
+        print(f"Giving vLLM {vllm_memory_percent * 100:.2f}% of GPU memory ({vllm_memory_needed / 1024**2:.2f} MB)")
 
         base_vllm_kwargs = {
-            "model": vllm_model_dir,
+            "model": "./t3-model",
             "task": "generate",
-            "tokenizer": "EnTokenizer" if variant == "english" else "MtlTokenizer",
+            "tokenizer": "EnTokenizer",
             "tokenizer_mode": "custom",
-            "gpu_memory_utilization": min(vllm_memory_percent, 0.9),
+            "gpu_memory_utilization": vllm_memory_percent,
             "enforce_eager": not compile,
             "max_model_len": max_model_len,
-            "trust_remote_code": True,
-            "swap_space": 0,  # Disable CPU swap to save 4GB of System RAM
         }
 
         t3 = LLM(**{**base_vllm_kwargs, **kwargs})
 
-        # S3Gen and Voice Encoder
         ve = VoiceEncoder()
         ve.load_state_dict(load_file(ckpt_dir / "ve.safetensors"))
         ve = ve.to(device=target_device).eval()
@@ -223,232 +147,23 @@ class ChatterboxTTS:
             target_device=target_device, max_model_len=max_model_len,
             t3=t3, t3_config=t3_config, t3_cond_enc=t3_enc, t3_speech_emb=t3_speech_emb, t3_speech_pos_emb=t3_speech_pos_emb,
             s3gen=s3gen, ve=ve, default_conds=default_conds,
-            variant=variant,
         )
 
     @classmethod
-    def from_pretrained(cls, 
-                        repo_id: str = REPO_ID, 
-                        revision: Optional[str] = None, 
-                        variant: str = "english",
+    def from_pretrained(cls,
+                        repo_id: str = REPO_ID,
+                        revision: str = "1b475dffa71fb191cb6d5901215eb6f55635a9b6",
                         *args, **kwargs) -> 'ChatterboxTTS':
-        import os
-        import shutil
+        for fpath in ["ve.safetensors", "t3_cfg.safetensors", "s3gen.safetensors", "tokenizer.json", "conds.pt"]:
+            local_path = hf_hub_download(repo_id=repo_id, filename=fpath, revision=revision)
 
-        files = ["ve.safetensors", "s3gen.safetensors", "tokenizer.json", "conds.pt"]
-        if variant == "english":
-            files.append("t3_cfg.safetensors")
-            t3_cfg_name = "t3_cfg.safetensors"
-        else:
-            files.extend(["t3_mtl23ls_v2.safetensors", "grapheme_mtl_merged_expanded_v1.json", "Cangjie5_TC.json"])
-            t3_cfg_name = "t3_mtl23ls_v2.safetensors"
+        # Ensure the symlink in './t3-model/model.safetensors' points to t3_cfg_path
+        t3_cfg_path = Path(local_path).parent / "t3_cfg.safetensors"
+        model_safetensors_path = Path.cwd() / "t3-model" / "model.safetensors"
+        model_safetensors_path.unlink(missing_ok=True)
+        model_safetensors_path.symlink_to(t3_cfg_path)
 
-        paths = {}
-        for f in files:
-            try:
-                paths[f] = hf_hub_download(repo_id=repo_id, filename=f, revision=revision)
-            except Exception:
-                print(f"File {f} not found in {repo_id}, trying fallback {FALLBACK_REPO_ID}...")
-                paths[f] = hf_hub_download(repo_id=FALLBACK_REPO_ID, filename=f, revision="05e904af2b5c7f8e482687a9d7336c5c824467d9")
-        
-        # Attempt to download config.json
-        try:
-            config_repo_path = hf_hub_download(repo_id=repo_id, filename="config.json", revision=revision)
-        except Exception:
-            try:
-                config_repo_path = hf_hub_download(repo_id=FALLBACK_REPO_ID, filename="config.json", revision="05e904af2b5c7f8e482687a9d7336c5c824467d9")
-            except Exception:
-                config_repo_path = None
-
-        # Create an isolated directory for vLLM so we don't corrupt the HF cache
-        vllm_cache_dir = Path(os.path.expanduser(f"~/.cache/chatterbox_vllm_{variant}"))
-        vllm_cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        for f, path in paths.items():
-            dest = vllm_cache_dir / f
-            dest.unlink(missing_ok=True)
-            try:
-                dest.symlink_to(path)
-            except Exception:
-                shutil.copy(path, dest)
-        
-        # Ensure config.json exists
-        config_dest = vllm_cache_dir / "config.json"
-        if config_repo_path:
-            config_dest.unlink(missing_ok=True)
-            try:
-                config_dest.symlink_to(config_repo_path)
-            except Exception:
-                shutil.copy(config_repo_path, config_dest)
-        else:
-            config_data = {
-                "model_type": "ChatterboxT3",
-                "architectures": ["T3VllmModel"],
-                "hidden_size": 1024,
-                "num_attention_heads": 16,
-                "num_hidden_layers": 25,
-                "intermediate_size": 4096,
-                "max_position_embeddings": 2048,
-                "vocab_size": 32000,
-                "tokenizer": "EnTokenizer" if variant == "english" else "MtlTokenizer",
-                "torch_dtype": "float16"
-            }
-            with open(config_dest, "w") as f:
-                json.dump(config_data, f, indent=2)
-            print(f"Generated default vLLM config at {config_dest}")
-
-        # 4. Final sanity check: Overwrite vocab_size (critical for weight loading)
-        try:
-            target_vocab = 32000
-            with open(config_dest, "r") as f:
-                cfg_data = json.load(f)
-            if cfg_data.get("vocab_size") != target_vocab or cfg_data.get("num_hidden_layers") != 25:
-                print(f"🔧 Forcing config update: vocab_size={target_vocab}, layers=25 in {config_dest}")
-                cfg_data["vocab_size"] = target_vocab
-                cfg_data["num_hidden_layers"] = 25
-                with open(config_dest, "w") as f:
-                    json.dump(cfg_data, f, indent=2)
-        except Exception as e:
-            print(f"Warning: Could not perform final config sanity check: {e}")
-                
-        model_path = vllm_cache_dir / "model.safetensors"
-        model_path.unlink(missing_ok=True)
-        try:
-            model_path.symlink_to(paths[t3_cfg_name])
-        except Exception:
-            shutil.copy(paths[t3_cfg_name], model_path)
-
-        return cls.from_local(vllm_cache_dir, variant=variant, *args, **kwargs)
-
-    @classmethod
-    def from_nepali(cls,
-                    model_repo_id: str = REPO_ID,
-                    model_filename: str = "t3_mtl_nepali_merged.safetensors",
-                    base_repo_id: str = REPO_ID,
-                    *args, **kwargs) -> 'ChatterboxTTS':
-        """Convenience method to load a Nepali fine-tuned model with all necessary base files."""
-        import os
-        import shutil
-
-        # 1. Download base files (ve, s3gen, conds, etc.)
-        base_files = ["ve.safetensors", "s3gen.safetensors", "conds.pt", "grapheme_mtl_merged_expanded_v1.json", "Cangjie5_TC.json"]
-        base_paths = {}
-        for f in base_files:
-            try:
-                # Try the unified repo first, then fallback
-                base_paths[f] = hf_hub_download(repo_id=base_repo_id, filename=f)
-            except Exception:
-                try:
-                    print(f"File {f} not found in {base_repo_id}, trying fallback {FALLBACK_REPO_ID}...")
-                    base_paths[f] = hf_hub_download(repo_id=FALLBACK_REPO_ID, filename=f, revision="05e904af2b5c7f8e482687a9d7336c5c824467d9")
-                except Exception as e:
-                    print(f"Warning: Could not download {f} from any repo: {e}")
-
-        # Attempt to download config.json (try unified repo first)
-        try:
-            config_repo_path = hf_hub_download(repo_id=base_repo_id, filename="config.json")
-        except Exception:
-            try:
-                config_repo_path = hf_hub_download(repo_id=FALLBACK_REPO_ID, filename="config.json", revision="05e904af2b5c7f8e482687a9d7336c5c824467d9")
-            except Exception:
-                config_repo_path = None
-        
-        # 2. Download/Get the fine-tuned T3 model
-        if os.path.exists(model_filename):
-            nepali_path = model_filename
-        else:
-            nepali_path = hf_hub_download(repo_id=model_repo_id, filename=model_filename)
-        
-        # 3. Create an isolated directory for vLLM
-        vllm_cache_dir = Path(os.path.expanduser("~/.cache/chatterbox_vllm_nepali"))
-        vllm_cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        for f, path in base_paths.items():
-            dest = vllm_cache_dir / f
-            dest.unlink(missing_ok=True)
-            try:
-                dest.symlink_to(path)
-            except Exception:
-                shutil.copy(path, dest)
-
-        # 3. Detect layer count from weights
-        from safetensors.torch import load_file
-        num_layers = 25 # fallback
-        try:
-            weights_meta = load_file(nepali_path, device="cpu")
-            max_layer = -1
-            for k in weights_meta.keys():
-                if k.startswith("tfmr.layers."):
-                    parts = k.split(".")
-                    if len(parts) > 2 and parts[2].isdigit():
-                        max_layer = max(max_layer, int(parts[2]))
-            if max_layer != -1:
-                num_layers = max_layer + 1
-                print(f"🔍 Auto-detected {num_layers} layers in {nepali_path}")
-            del weights_meta # Free memory
-        except Exception as e:
-            print(f"Warning: Could not auto-detect layer count: {e}")
-
-        # Ensure config.json exists (ESSENTIAL for vLLM to recognize the architecture)
-        config_dest = vllm_cache_dir / "config.json"
-        
-        # DEFINITIVE OVERLOAD: Force 2048 dimensions for Lane-CFG stability
-        config_data = {
-            "model_type": "ChatterboxT3",
-            "architectures": ["T3VllmModel"],
-            "hidden_size": 2048,
-            "num_attention_heads": 32,
-            "num_hidden_layers": num_layers,
-            "intermediate_size": 8192,
-            "num_key_value_heads": 16,
-            "max_position_embeddings": 2048,
-            "vocab_size": 32000,
-            "tokenizer": "MtlTokenizer",
-            "torch_dtype": "float16"
-        }
-        
-        # If a config exists, preserve custom flags but overwrite dimensions
-        if config_repo_path:
-            try:
-                with open(config_repo_path, "r") as f:
-                    repo_cfg = json.load(f)
-                config_data.update({k: v for k, v in repo_cfg.items() if k not in config_data})
-            except Exception:
-                pass
-
-        with open(config_dest, "w") as f:
-            json.dump(config_data, f, indent=2)
-        print(f"🚀 FORCED 2048-dim vLLM config at {config_dest}")
-        
-        model_vllm_path = vllm_cache_dir / "model.safetensors"
-        model_vllm_path.unlink(missing_ok=True)
-        
-        # If the downloaded file is a .pt file, convert it to safetensors for vLLM compatibility
-        if nepali_path.endswith(".pt"):
-            import torch
-            from safetensors.torch import save_file
-            print(f"Converting {nepali_path} to safetensors for vLLM...")
-            state = torch.load(nepali_path, map_location="cpu", weights_only=True)
-            # Clean keys if needed
-            clean_state = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in state.items()}
-            # Ensure tensors are contiguous
-            clean_state = {k: v.contiguous() for k, v in clean_state.items()}
-            save_file(clean_state, model_vllm_path)
-            print("Conversion complete.")
-        else:
-            try:
-                model_vllm_path.symlink_to(nepali_path)
-            except Exception:
-                shutil.copy(nepali_path, model_vllm_path)
-
-        return cls.from_local(vllm_cache_dir, variant="multilingual", *args, **kwargs)
-    
-    def get_supported_languages(self) -> dict[str, str]:
-        """Return dictionary of supported language codes and names."""
-        if self.variant == "multilingual":
-            return SUPPORTED_LANGUAGES.copy()
-        else:
-            return { "en": "English" }
+        return cls.from_local(Path(local_path).parent, *args, **kwargs)
 
     @lru_cache(maxsize=10)
     def get_audio_conditionals(self, wav_fpath: Optional[str] = None) -> Tuple[dict[str, Any], torch.Tensor]:
@@ -498,13 +213,12 @@ class ChatterboxTTS:
         self,
         prompts: Union[str, list[str]],
         audio_prompt_path: Optional[str] = None,
-        language_id: Optional[str] = 'en',
-        exaggeration: float = 0.0,
-        temperature: float = 0.0,
+        exaggeration: float = 0.5,
+        temperature: float = 0.8,
         max_tokens=1000, # Capped at max_model_len
 
         # From original Chatterbox HF generation args
-        top_p=1.0,
+        top_p=0.8,
         repetition_penalty=2.0,
 
         # Supports anything in https://docs.vllm.ai/en/v0.9.2/api/vllm/index.html?h=samplingparams#vllm.SamplingParams
@@ -517,7 +231,6 @@ class ChatterboxTTS:
             s3gen_ref=s3gen_ref,
             cond_emb=cond_emb,
             temperature=temperature,
-            language_id=language_id,
             exaggeration=exaggeration,
             max_tokens=max_tokens,
             top_p=top_p,
@@ -530,9 +243,8 @@ class ChatterboxTTS:
         prompts: Union[str, list[str]],
         s3gen_ref: dict[str, Any],
         cond_emb: torch.Tensor,
-        language_id: Optional[str] = 'en',
-        temperature: float = 0.0,
-        exaggeration: float = 0.0,
+        temperature: float = 0.8,
+        exaggeration: float = 0.5,
         max_tokens=1000, # Capped at max_model_len
 
         # Number of diffusion steps to use for S3Gen
@@ -541,8 +253,7 @@ class ChatterboxTTS:
         diffusion_steps: int = 10,
 
         # From original Chatterbox HF generation args
-        top_p=1.0,
-        min_p=0.05,
+        top_p=0.8,
         repetition_penalty=2.0,
 
         # Supports anything in https://docs.vllm.ai/en/v0.9.2/api/vllm/index.html?h=samplingparams#vllm.SamplingParams
@@ -551,24 +262,10 @@ class ChatterboxTTS:
         if isinstance(prompts, str):
             prompts = [prompts]
 
-        # Validate language_id
-        if language_id and language_id.lower() not in self.get_supported_languages():
-            supported_langs = ", ".join(self.get_supported_languages().keys())
-            raise ValueError(
-                f"Unsupported language_id '{language_id}'. "
-                f"Supported languages: {supported_langs}"
-            )
-
         cond_emb = self.update_exaggeration(cond_emb, exaggeration)
 
         # Norm and tokenize text
         prompts = ["[START]" + punc_norm(p) + "[STOP]" for p in prompts]
-
-        # For multilingual, prepend the language token
-        if self.variant == "multilingual":
-            # Use angle brackets to avoid conflicts with other start/stop tokens.
-            # This will be parsed and replaced in the tokenizer.
-            prompts = [f"<{language_id.lower()}>{p}" for p in prompts]
 
         with torch.inference_mode():
             start_time = time.time()
