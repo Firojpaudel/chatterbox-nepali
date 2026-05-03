@@ -311,6 +311,14 @@ class ChatterboxTTS:
         print(f"Giving vLLM {vllm_memory_percent * 100:.2f}% of GPU memory ({vllm_memory_needed / 1024**2:.2f} MB)")
 
         # ── 5. Start vLLM engine ──────────────────────────────────────────
+        import os
+        # HACK: The chatterbox T3 model concatenates cond and uncond embeds, passing 2N tokens 
+        # to the LLaMA backbone while the engine only tracks N tokens. 
+        # The default xformers backend crashes due to strict shape assertions:
+        # `assert decode_query.shape[0] == num_decode_query_tokens`.
+        # Forcing PyTorch SDPA attention bypasses this assert and allows CFG to process.
+        os.environ["VLLM_ATTENTION_BACKEND"] = "TORCH_SDPA"
+
         base_vllm_kwargs = {
             "model": "./t3-model",
             "task": "generate",
