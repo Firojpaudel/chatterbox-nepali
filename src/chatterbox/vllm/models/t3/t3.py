@@ -335,18 +335,22 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
         cond_embeds, uncond_embeds = inputs_embeds.split([self.dim, self.dim], dim=1)
         
-        # Double positions and embeds, ensuring strict contiguity for CUDA kernels
-        doubled_positions = torch.cat([positions, positions], dim=0).contiguous()
-        doubled_embeds = torch.cat([cond_embeds, uncond_embeds], dim=0).contiguous()
-
-        hidden_states = self.tfmr(
+        # Invoke tfmr twice (Cond then Uncond) to bypass vLLM metadata batch-mismatch checks
+        # This is strictly safer for vLLM v0.9.2 than batch-doubling hacks
+        h_cond = self.tfmr(
             input_ids=None,
-            positions=doubled_positions,
+            positions=positions,
             intermediate_tensors=intermediate_tensors, 
-            inputs_embeds=doubled_embeds
+            inputs_embeds=cond_embeds.contiguous()
         )
         
-        h1, h2 = hidden_states.split([len(cond_embeds), len(uncond_embeds)], dim=0)
-        return torch.cat([h1, h2], dim=1).contiguous()
+        h_uncond = self.tfmr(
+            input_ids=None,
+            positions=positions,
+            intermediate_tensors=intermediate_tensors, 
+            inputs_embeds=uncond_embeds.contiguous()
+        )
+        
+        return torch.cat([h_cond, h_uncond], dim=1).contiguous()
 
     def get_language_model(self) -> torch.nn.Module: return self.tfmr
