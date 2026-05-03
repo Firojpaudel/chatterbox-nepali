@@ -2,6 +2,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union, Tuple, Any
 import time
+# Monkey-patch transformers to prevent vLLM from crashing on duplicate 'aimv2' registration
+import transformers
+from transformers.models.auto.configuration_auto import AutoConfig
+_original_register = AutoConfig.register
+def _new_register(model_type, config, exist_ok=False):
+    return _original_register(model_type, config, exist_ok=True)
+AutoConfig.register = _new_register
 
 from vllm import LLM, SamplingParams
 from functools import lru_cache
