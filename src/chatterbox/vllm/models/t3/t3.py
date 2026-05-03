@@ -375,7 +375,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     yield subname, new_weight
                     del new_weight
                 elif "o_proj" in subname or "down_proj" in subname:
-                    # Block-diagonal expansion for output projections to maintain stream isolation
+                    # BLOCK-DIAGONAL FIX: Perfect isolation barrier
                     new_weight = torch.zeros((weight.shape[0] * 2, weight.shape[1] * 2), dtype=weight.dtype, device=weight.device)
                     new_weight[:weight.shape[0], :weight.shape[1]] = weight
                     new_weight[weight.shape[0]:, weight.shape[1]:] = weight

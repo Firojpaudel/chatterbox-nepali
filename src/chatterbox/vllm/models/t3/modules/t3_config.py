@@ -1,11 +1,11 @@
 from typing import Optional
 
 T3_CONFIG = {
-    "hidden_size": 2048,       # Expanded for block-diagonal CFG
+    "hidden_size": 2048,
     "intermediate_size": 8192,
-    "num_attention_heads": 32, # Expanded from 16
+    "num_attention_heads": 32,
     "num_hidden_layers": 30,
-    "num_key_value_heads": 32, # Expanded from 16
+    "num_key_value_heads": 32,
     "rms_norm_eps": 1e-05,
     "vocab_size": 32000,
     "rope_theta": 10000.0,
@@ -15,7 +15,7 @@ T3_CONFIG = {
 class T3Config:
     def __init__(self, **kwargs):
         self.n_channels = kwargs.get("hidden_size", 2048)
-        self.intermediate_size = kwargs.get("intermediate_size", 4096)
+        self.intermediate_size = kwargs.get("intermediate_size", 8192)
         self.n_heads = kwargs.get("num_attention_heads", 32)
         self.n_layers = kwargs.get("num_hidden_layers", 30)
         self.n_kv_heads = kwargs.get("num_key_value_heads", 32)
@@ -23,6 +23,12 @@ class T3Config:
         self.vocab_size = kwargs.get("vocab_size", 32000)
         self.rope_theta = kwargs.get("rope_theta", 10000.0)
         self.max_position_embeddings = kwargs.get("max_position_embeddings", 1000)
+        
+        # Missing fields for CondEnc
+        self.encoder_type = "voice_encoder"
+        self.n_conditioning_tokens = 34
+        self.conditioning_dim = 1024
+        self.n_audio_tokens = 1
         self.hf_config = None
 
     @classmethod
