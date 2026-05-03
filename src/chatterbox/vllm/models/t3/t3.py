@@ -316,22 +316,48 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         
         print(f"--- T3 Weight Loading Started ---")
         sample_keys = []
+        possible_backbone_keys = []
         total_weights = 0
+        
+        # Print a few suspected backbone keys that we might be missing
+        mismatched_layers_keys = []
+        
         for raw_name, weight in weights:
             total_weights += 1
             # Clean keys more aggressively
             name = raw_name
-            while name.startswith("model.") or name.startswith("patched_model.") or name.startswith("t3."):
-                if name.startswith("model."): name = name[6:]
-                elif name.startswith("patched_model."): name = name[14:]
-                elif name.startswith("t3."): name = name[3:]
+            # Handle common nested formats like model.model.tfmr... or 0.tfmr...
+            parts = name.split('.')
+            for i in range(len(parts)):
+                candidate = ".".join(parts[i:])
+                if candidate.startswith("tfmr.") or candidate.startswith("layers."):
+                    name = candidate
+                    break
             
+            # If still not starting with tfmr or layers, try to find it anywhere in the name
+            if not (name.startswith("tfmr.") or name.startswith("layers.")) and ("tfmr." in name or "layers." in name):
+                if "tfmr." in name:
+                    name = name[name.find("tfmr."):]
+                elif "layers." in name:
+                    name = name[name.find("layers."):]
+
             if len(sample_keys) < 10:
                 sample_keys.append(f"{raw_name} -> {name}")
+            
+            if ("tfmr" in raw_name or "layers" in raw_name) and len(possible_backbone_keys) < 5:
+                possible_backbone_keys.append(raw_name)
 
             # Llama weights need to be passed through vllm's load_weights rather than load_state_dict
+            is_backbone = False
+            subname = ""
             if name.startswith("tfmr."):
+                is_backbone = True
                 subname = name[5:]
+            elif name.startswith("layers.") or name == "embed_tokens.weight" or name == "norm.weight":
+                is_backbone = True
+                subname = name
+            
+            if is_backbone:
                 if subname == "embed_tokens.weight":
                     target_vocab = self.vllm_config.model_config.hf_config.vocab_size
                     if weight.shape[0] < target_vocab:
@@ -342,6 +368,10 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 counts["tfmr"] += 1
                 continue
             
+            if "layers" in name or "tfmr" in name:
+                if len(mismatched_layers_keys) < 10:
+                    mismatched_layers_keys.append(name)
+
             loaded_params.add(raw_name)
             if '.' not in name:
                 counts["other"] += 1
@@ -369,15 +399,17 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
         print(f"--- T3 Weight Load Summary ---")
         print(f"  Total weights in file: {total_weights}")
-        print(f"  Sample keys (first 10): {sample_keys}")
+        print(f"  Sample keys: {sample_keys}")
+        print(f"  Keys with 'tfmr'/'layers': {possible_backbone_keys}")
+        if mismatched_layers_keys:
+            print(f"  MISMATCHED 'layers' keys (NOT LOADED): {mismatched_layers_keys}")
         print(f"  Backbone (tfmr): {counts['tfmr']} params")
         print(f"  Conditioning:    {counts['cond_enc']} params")
         print(f"  Embeddings:      Text={counts['text_emb']}, Speech={counts['speech_emb']}")
         print(f"  Heads/Other:     {counts['speech_head']} / {counts['other']}")
         
         if counts['tfmr'] == 0:
-            print("❌ CRITICAL WARNING: No backbone (tfmr) weights were loaded! The model will generate random noise.")
-            print("   Check if your weights file keys start with 'tfmr.', 'model.tfmr.', etc.")
+            print("❌ CRITICAL WARNING: No backbone (tfmr) weights were loaded!")
         else:
             print(f"✅ Successfully loaded {counts['tfmr']} backbone parameters.")
         print(f"-------------------------------")
