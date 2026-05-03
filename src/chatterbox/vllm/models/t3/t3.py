@@ -373,7 +373,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                             if w.shape[1] == 1024:
                                 print(f"DEBUG: Expanding {attr}.{key} (dim 1) from 1024 to 2048")
                                 state_dict[key] = torch.cat([w, w], dim=1)
-                            elif w.shape[0] == 1024:
+                            if w.shape[0] == 1024:
                                 print(f"DEBUG: Expanding {attr}.{key} (dim 0) from 1024 to 2048")
                                 state_dict[key] = torch.cat([w, w], dim=0)
                         elif w.dim() == 3 and w.shape[2] == 1024:

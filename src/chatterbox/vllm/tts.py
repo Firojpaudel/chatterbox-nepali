@@ -167,7 +167,7 @@ class ChatterboxTTS:
                 if v.dim() == 2:
                     if v.shape[1] == 1024:
                         v = torch.cat([v, v], dim=1)
-                    elif v.shape[0] == 1024:
+                    if v.shape[0] == 1024:
                         v = torch.cat([v, v], dim=0)
                 # 3D weights: [1, 32, 1024]
                 elif v.dim() == 3 and v.shape[2] == 1024:
