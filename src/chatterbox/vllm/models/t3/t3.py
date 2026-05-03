@@ -672,15 +672,15 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
         if self.SAFE_MODE:
             # Manually run the transformer layers to bypass the broken embedding lookup in vLLM's LlamaModel
+            # Note: In vLLM 0.9.2, LlamaDecoderLayer.forward() only takes (positions, hidden_states, residual).
+            # kv_caches and attn_metadata are managed internally by the attention backend.
             hidden_states = inputs_embeds
             residual = None
             for layer in self.tfmr.layers:
                 hidden_states, residual = layer(
-                    positions=positions,
-                    hidden_states=hidden_states,
-                    residual=residual,
-                    kv_caches=kv_caches,
-                    attn_metadata=attn_metadata,
+                    positions,
+                    hidden_states,
+                    residual,
                 )
             hidden_states = self.tfmr.norm(hidden_states, residual)
             return hidden_states
