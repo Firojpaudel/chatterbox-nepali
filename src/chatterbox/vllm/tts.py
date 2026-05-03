@@ -279,7 +279,7 @@ class ChatterboxTTS:
                 "num_hidden_layers": 25,
                 "intermediate_size": 4096,
                 "max_position_embeddings": 2048,
-                "vocab_size": 8,
+                "vocab_size": 15000,
                 "tokenizer": "EnTokenizer" if variant == "english" else "MtlTokenizer",
                 "torch_dtype": "float16"
             }
@@ -289,7 +289,7 @@ class ChatterboxTTS:
 
         # 4. Final sanity check: Overwrite vocab_size (critical for weight loading)
         try:
-            target_vocab = 8
+            target_vocab = 15000
             with open(config_dest, "r") as f:
                 cfg_data = json.load(f)
             if cfg_data.get("vocab_size") != target_vocab or cfg_data.get("num_hidden_layers") != 25:
@@ -393,7 +393,7 @@ class ChatterboxTTS:
                 "num_hidden_layers": num_layers,
                 "intermediate_size": 4096,
                 "max_position_embeddings": 2048,
-                "vocab_size": 8,
+                "vocab_size": 15000,
                 "tokenizer": "MtlTokenizer",
                 "torch_dtype": "float16"
             }
@@ -405,9 +405,9 @@ class ChatterboxTTS:
         try:
             with open(config_dest, "r") as f:
                 cfg_data = json.load(f)
-            if cfg_data.get("vocab_size") != 8 or cfg_data.get("num_hidden_layers") != num_layers:
-                print(f"🔧 Forcing config update: vocab_size=8, layers={num_layers} in {config_dest}")
-                cfg_data["vocab_size"] = 8
+            if cfg_data.get("vocab_size") != 15000 or cfg_data.get("num_hidden_layers") != num_layers:
+                print(f"🔧 Forcing config update: vocab_size=15000, layers={num_layers} in {config_dest}")
+                cfg_data["vocab_size"] = 15000
                 cfg_data["num_hidden_layers"] = num_layers
                 with open(config_dest, "w") as f:
                     json.dump(cfg_data, f, indent=2)
