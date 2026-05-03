@@ -350,12 +350,16 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             # Llama weights need to be passed through vllm's load_weights rather than load_state_dict
             is_backbone = False
             subname = ""
-            if name.startswith("tfmr."):
-                is_backbone = True
-                subname = name[5:]
-            elif name.startswith("layers.") or name == "embed_tokens.weight" or name == "norm.weight":
-                is_backbone = True
-                subname = name
+            
+            # Find the true backbone key by looking for common markers
+            for marker in ["layers.", "embed_tokens.", "norm.", "tfmr."]:
+                if marker in name:
+                    is_backbone = True
+                    if marker == "tfmr.":
+                        subname = name[name.find(marker) + 5:]
+                    else:
+                        subname = name[name.find(marker):]
+                    break
             
             if is_backbone:
                 if subname == "embed_tokens.weight":
@@ -368,9 +372,9 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 counts["tfmr"] += 1
                 continue
             
-            if "layers" in name or "tfmr" in name:
-                if len(mismatched_layers_keys) < 10:
-                    mismatched_layers_keys.append(name)
+            if "layers" in name.lower() or "tfmr" in name.lower():
+                if len(mismatched_layers_keys) < 100:
+                    mismatched_layers_keys.append(raw_name)
 
             loaded_params.add(raw_name)
             if '.' not in name:
