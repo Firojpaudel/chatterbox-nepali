@@ -88,6 +88,8 @@ vllm_model = None
 BASE_T3_STATE = None
 # We no longer pre-load states to save RAM
 CURRENT_MODEL_TYPE = "nepali-final"
+# Set ENABLE_VLLM=1 to skip standard model and load vLLM at startup
+VLLM_MODE = os.environ.get("ENABLE_VLLM", "").strip() in ("1", "true", "True", "yes")
 
 def set_seed(seed: int):
     torch.manual_seed(seed)
@@ -347,7 +349,7 @@ with gr.Blocks(title="Chatterbox Nepali TTS", css=CUSTOM_CSS) as demo:
                 enable_sanitizer = gr.Checkbox(label="Aggressive Sanitizer", value=True)
                 enable_chunking = gr.Checkbox(label="Smart Chunking", value=True)
                 enable_protection = gr.Checkbox(label="Hallucination Protection", value=True)
-                use_vllm = gr.Checkbox(label="Enable vLLM (Fast Inference)", value=False)
+                use_vllm = gr.Checkbox(label="Enable vLLM (Fast Inference)", value=VLLM_MODE)
             
             with gr.Row():
                 language_id = gr.Dropdown(choices=list(SUPPORTED_LANGUAGES.keys()), value="ne", label="Language")
@@ -387,7 +389,8 @@ with gr.Blocks(title="Chatterbox Nepali TTS", css=CUSTOM_CSS) as demo:
     )
 
     def load_wrapper(use_vllm): 
-        get_or_load_model(use_vllm=use_vllm)
+        if not VLLM_MODE:  # Only auto-load if not pre-loaded at startup
+            get_or_load_model(use_vllm=use_vllm)
         return None
 
     demo.load(fn=load_wrapper, inputs=[use_vllm], outputs=None)
@@ -399,4 +402,8 @@ with gr.Blocks(title="Chatterbox Nepali TTS", css=CUSTOM_CSS) as demo:
     )
 
 if __name__ == "__main__":
+    if VLLM_MODE:
+        print("🚀 ENABLE_VLLM is set — pre-loading vLLM at startup (outside Gradio request handler)...")
+        get_or_load_model(use_vllm=True)
+        print("✅ vLLM model ready!")
     demo.launch(server_name="0.0.0.0", share=True)
