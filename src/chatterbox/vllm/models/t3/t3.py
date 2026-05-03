@@ -437,7 +437,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 if id_buffer:
                     cur_ids = torch.stack(id_buffer).to(input_ids.device)
                     cur_pos = torch.stack(pos_buffer).to(input_ids.device)
-                    if in_prefill_block:
+                    if in_prefill_block and remaining_multimodal_embeddings is not None:
                         mme, remaining_multimodal_embeddings = remaining_multimodal_embeddings\
                             .split([len(id_buffer), len(remaining_multimodal_embeddings) - len(id_buffer)], dim=0)
                         output.append((cur_ids, mme, cur_pos))
