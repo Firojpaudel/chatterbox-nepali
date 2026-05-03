@@ -103,9 +103,8 @@ MULTILINGUAL_VLLM_CONFIG = {
     "attention_bias": False,
     "attention_dropout": 0.0,
     "attn_implementation": "sdpa",
-    "head_dim": 64,
     "hidden_act": "silu",
-    "hidden_size": 2048,
+    "hidden_size": 4096,
     "initializer_range": 0.02,
     "intermediate_size": 8192,
     "max_position_embeddings": 8192,
@@ -165,16 +164,29 @@ class ChatterboxTTS:
             for k, v in weights_dict.items():
                 # 2D weights: [N, 1024] or [1024, N]
                 if v.dim() == 2:
-                    if v.shape[1] == 1024:
-                        v = torch.cat([v, v], dim=1)
-                    if v.shape[0] == 1024:
-                        v = torch.cat([v, v], dim=0)
+                    new_v = torch.zeros([target_dim if v.shape[0] == 1024 else v.shape[0], target_dim if v.shape[1] == 1024 else v.shape[1]], dtype=v.dtype, device=v.device)
+                    if v.shape[1] == 1024 and v.shape[0] == 1024:
+                        new_v[:1024, :1024] = v
+                        new_v[1024:2048, 1024:2048] = v
+                    elif v.shape[1] == 1024:
+                        new_v[:, :1024] = v
+                        new_v[:, 1024:2048] = v
+                    elif v.shape[0] == 1024:
+                        new_v[:1024, :] = v
+                        new_v[1024:2048, :] = v
+                    v = new_v
                 # 3D weights: [1, 32, 1024]
                 elif v.dim() == 3 and v.shape[2] == 1024:
-                    v = torch.cat([v, v], dim=2)
+                    new_v = torch.zeros([v.shape[0], v.shape[1], target_dim], dtype=v.dtype, device=v.device)
+                    new_v[:, :, :1024] = v
+                    new_v[:, :, 1024:2048] = v
+                    v = new_v
                 # 1D weights: [1024] (biases/norms)
                 elif v.dim() == 1 and v.shape[0] == 1024:
-                    v = torch.cat([v, v], dim=0)
+                    new_v = torch.zeros([target_dim], dtype=v.dtype, device=v.device)
+                    new_v[:1024] = v
+                    new_v[1024:2048] = v
+                    v = new_v
                 expanded[k] = v
             return expanded
 

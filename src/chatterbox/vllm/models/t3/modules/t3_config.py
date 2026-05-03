@@ -15,8 +15,8 @@ T3_CONFIG = {
 class T3Config:
     def __init__(self, **kwargs):
         # Native T3 dimension is 1024. 
-        # The vLLM backbone will be 2048, but the internal components are 1024.
-        self.n_channels = 2048
+        # We use 4096 channels because vLLM stubbornlly defaults to 128-dim heads (32*128=4096)
+        self.n_channels = 4096
         self.intermediate_size = 8192
         self.n_heads = 32
         self.n_layers = 30

@@ -265,38 +265,32 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 # Dynamic dim based on weight
                 current_dim = self.weight.shape[0] // 2
                 
-                # Cast to float32 for precision, split into the two streams
+                # Cast to float32 for precision
                 x_fp32 = x.to(torch.float32)
                 
-                # DEBUG: Monitor shapes if there's a mismatch
-                if x_fp32.shape[-1] != current_dim * 2:
-                    print(f"CRITICAL: RMSNorm shape mismatch! x: {list(x_fp32.shape)}, weight: {list(self.weight.shape)}, current_dim: {current_dim}")
+                # Split 4096-dim into 1024-dim blocks for absolute isolation
+                # We split based on the actual weight size (could be 2048 or 4096)
+                block_size = 1024
+                xs = x_fp32.split(block_size, dim=-1)
+                ws = self.weight.split(block_size, dim=-1)
                 
-                x1, x2 = x_fp32.split([current_dim, current_dim], dim=-1)
-                w1, w2 = self.weight.split([current_dim, current_dim], dim=-1)
+                # Normalize Cond (x1) and Uncond (x2) independently
+                def norm_block(xb, wb):
+                    var = xb.pow(2).mean(-1, keepdim=True)
+                    xb = xb * torch.rsqrt(var + self.variance_epsilon)
+                    return (xb * wb).to(x.dtype)
                 
-                # DEBUG: Monitor stream isolation and stats
-                if getattr(self, '_log_count', 0) < 3:
-                    c_mean, c_std = x1.mean().item(), x1.std().item()
-                    u_mean, u_std = x2.mean().item(), x2.std().item()
-                    if torch.isnan(x1).any() or torch.isnan(x2).any():
-                        print(f"CRITICAL: NaN detected in RMSNorm input! Cond NaN: {torch.isnan(x1).any()}, Uncond NaN: {torch.isnan(x2).any()}")
-                    # Only print if they are significantly different or it's the first few layers
-                    print(f"DEBUG: RMSNorm Stream Stats - Cond: mean={c_mean:.4f}, std={c_std:.4f} | Uncond: mean={u_mean:.4f}, std={u_std:.4f}")
-                    self._log_count = getattr(self, '_log_count', 0) + 1
-
-                var1 = x1.pow(2).mean(-1, keepdim=True)
-                x1_norm = x1 * torch.rsqrt(var1 + self.variance_epsilon)
+                y1 = norm_block(xs[0], ws[0])
+                y2 = norm_block(xs[1], ws[1])
                 
-                var2 = x2.pow(2).mean(-1, keepdim=True)
-                x2_norm = x2 * torch.rsqrt(var2 + self.variance_epsilon)
-                
-                x_norm_fp16 = torch.cat([x1_norm, x2_norm], dim=-1).to(self.weight.dtype)
-                out = x_norm_fp16 * self.weight
+                # Reconstruct
+                res = torch.zeros_like(x)
+                res[..., :block_size] = y1
+                res[..., block_size:2*block_size] = y2
                 
                 if residual is not None:
-                    return out, residual
-                return out
+                    return res, residual
+                return res
 
         # Apply the patch to all layers and the final output norm
         for layer in self.tfmr.layers:
@@ -375,22 +369,29 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                         print(f"DEBUG: Custom component {attr}.{key} checkpoint shape: {list(w.shape)}")
                         self._log_weights_count = getattr(self, '_log_weights_count', 0) + 1
 
-                    # If either dimension is 1024, expand it to 2048
-                    if True: # Force check for 1024-dim weights regardless of self.dim
-                        if w.dim() == 2:
-                            if w.shape[1] == 1024:
-                                print(f"DEBUG: Expanding {attr}.{key} (dim 1) from 1024 to 2048")
-                                w = torch.cat([w, w], dim=1)
-                            if w.shape[0] == 1024:
-                                print(f"DEBUG: Expanding {attr}.{key} (dim 0) from 1024 to 2048")
-                                w = torch.cat([w, w], dim=0)
-                            state_dict[key] = w
-                        elif w.dim() == 3 and w.shape[2] == 1024:
-                            print(f"DEBUG: Expanding {attr}.{key} (dim 2) from 1024 to 2048")
-                            state_dict[key] = torch.cat([w, w], dim=2)
-                        elif w.dim() == 1 and w.shape[0] == 1024:
-                            print(f"DEBUG: Expanding {attr}.{key} bias from 1024 to 2048")
-                            state_dict[key] = torch.cat([w, w], dim=0)
+                    # We expand to self.dim (now 4096) with zero-padding to ensure stream isolation
+                    target_dim = self.dim
+                    if w.dim() == 2:
+                        new_w = torch.zeros([target_dim, w.shape[1] if w.shape[1] != 1024 else target_dim], dtype=w.dtype, device=w.device)
+                        if w.shape[1] == 1024:
+                            # 2D weight with 1024-dim input (e.g. Linear)
+                            new_w[:1024, :1024] = w
+                            new_w[1024:2048, 1024:2048] = w
+                        else:
+                            # 2D weight with other input (e.g. Speaker embedding)
+                            new_w[:1024, :] = w
+                            new_w[1024:2048, :] = w
+                        state_dict[key] = new_w
+                    elif w.dim() == 1 and w.shape[0] == 1024:
+                        new_w = torch.zeros([target_dim], dtype=w.dtype, device=w.device)
+                        new_w[:1024] = w
+                        new_w[1024:2048] = w
+                        state_dict[key] = new_w
+                    elif w.dim() == 3 and w.shape[2] == 1024:
+                        new_w = torch.zeros([w.shape[0], w.shape[1], target_dim], dtype=w.dtype, device=w.device)
+                        new_w[:, :, :1024] = w
+                        new_w[:, :, 1024:2048] = w
+                        state_dict[key] = new_w
 
                 print(f"Loading vLLM weights: {attr} ({list(state_dict.keys())})")
                 getattr(self, attr).load_state_dict(state_dict, strict=False)
