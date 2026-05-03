@@ -497,7 +497,7 @@ class ChatterboxTTS:
 
                     speech_tokens = torch.tensor([token - SPEECH_TOKEN_OFFSET for token in output.token_ids], device="cuda")
                     speech_tokens = drop_invalid_tokens(speech_tokens)
-                    speech_tokens = speech_tokens[speech_tokens < 6561]
+                    speech_tokens = speech_tokens[speech_tokens < self.t3_config.stop_speech_token]
 
                     wav, _ = self.s3gen.inference(
                         speech_tokens=speech_tokens,
