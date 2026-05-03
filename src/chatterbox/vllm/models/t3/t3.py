@@ -60,7 +60,6 @@ class T3MultiModalDummyInputsBuilder(BaseDummyInputsBuilder):
         return "[START]Hello![STOP]"
 
     def get_dummy_mm_data(self, seq_len: int, mm_counts: Mapping[str, int]) -> MultiModalDataDict:
-        # Use float16 for dummy data to match vLLM expected dtype
         return { "conditionals": [torch.zeros(CONDITIONING_SIZE, 1024, dtype=torch.float16)] * mm_counts["conditionals"] }
 
 
@@ -224,7 +223,6 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
         dev = self.speech_emb.weight.device
         dtype = self.speech_emb.weight.dtype
-        # Ensure precomputed embeddings match model dtype
         self.precomputed_text_pos_emb = self.text_pos_emb.get_fixed_embedding(torch.arange(self.t3conf.max_text_tokens + 2, device=dev))[0].to(dtype)
         self.precomputed_speech_pos_emb = self.speech_pos_emb.get_fixed_embedding(torch.arange(self.t3conf.max_speech_tokens + 4, device=dev))[0].to(dtype)
         return loaded_params
@@ -270,9 +268,8 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         dtype = self.speech_emb.weight.dtype
         if multimodal_embeddings is None or len(multimodal_embeddings) == 0:
             embeds = self.speech_emb(input_ids - SPEECH_TOKEN_OFFSET)
-            return torch.cat([embeds, embeds], dim=1)
+            return torch.cat([embeds, embeds], dim=1).contiguous()
         
-        # Cast multimodal embeddings to match model dtype immediately
         mm_casted = [mm.to(dtype) for mm in multimodal_embeddings]
             
         out = []
@@ -320,7 +317,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     out.append(torch.cat([cond_embeds, uncond_embeds], dim=1))
             else:
                 out.append(torch.zeros(len(ids), self.dim * 2, dtype=dtype, device=ids.device))
-        return torch.cat(out, dim=0)
+        return torch.cat(out, dim=0).contiguous()
 
     def compute_logits(self, hidden_states: torch.Tensor, sampling_metadata: SamplingMetadata) -> torch.Tensor:
         cond_hs, uncond_hs = hidden_states.split([self.dim, self.dim], dim=1)
@@ -338,14 +335,18 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
         cond_embeds, uncond_embeds = inputs_embeds.split([self.dim, self.dim], dim=1)
         
+        # Double positions and embeds, ensuring strict contiguity for CUDA kernels
+        doubled_positions = torch.cat([positions, positions], dim=0).contiguous()
+        doubled_embeds = torch.cat([cond_embeds, uncond_embeds], dim=0).contiguous()
+
         hidden_states = self.tfmr(
             input_ids=None,
-            positions=torch.cat([positions, positions], dim=0),
+            positions=doubled_positions,
             intermediate_tensors=intermediate_tensors, 
-            inputs_embeds=torch.cat([cond_embeds, uncond_embeds], dim=0)
+            inputs_embeds=doubled_embeds
         )
         
         h1, h2 = hidden_states.split([len(cond_embeds), len(uncond_embeds)], dim=0)
-        return torch.cat([h1, h2], dim=1)
+        return torch.cat([h1, h2], dim=1).contiguous()
 
     def get_language_model(self) -> torch.nn.Module: return self.tfmr
