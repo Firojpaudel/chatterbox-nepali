@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import random
 import os
+import json
 from transformers.feature_extraction_utils import BatchFeature
 
 from vllm.config import VllmConfig, ModelConfig
@@ -191,18 +192,31 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         state_dicts = {}
         hf_llama_weights = {}
         
+        expected_shapes = {n: p.shape for n, p in self.tfmr.named_parameters()}
+        print("\n--- T3 GQA SHAPE DIAGNOSTIC ---")
+
         for raw_name, weight in weights:
             name = raw_name
             if "tfmr." in name:
                 subname = name[name.find("tfmr.")+5:]
+                orig_shape = weight.shape
                 
-                # Expand weights to match the doubled config (2x everything)
+                # Expand weights
                 if "qkv_proj.weight" in subname:
-                    q, k, v = weight.chunk(3, dim=0)
-                    new_q = torch.block_diag(q, q)
-                    new_k = torch.block_diag(k, k)
-                    new_v = torch.block_diag(v, v)
-                    weight = torch.cat([new_q, new_k, new_v], dim=0)
+                    # DIAGNOSTIC: How many heads are in this weight?
+                    print(f"DEBUG: qkv_proj.weight raw shape: {orig_shape}")
+                    # Proportional split assuming 1024 hidden
+                    # Standard MHA: 3072 (1024+1024+1024)
+                    # GQA 2:1: 1536 (1024+256+256) ?
+                    try:
+                        q, k, v = weight.chunk(3, dim=0) # MHA fallback
+                        new_q = torch.block_diag(q, q)
+                        new_k = torch.block_diag(k, k)
+                        new_v = torch.block_diag(v, v)
+                        weight = torch.cat([new_q, new_k, new_v], dim=0)
+                    except Exception as e:
+                        print(f"FAILED TO CHUNK QKV: {subname} | Shape: {orig_shape}")
+                        raise e
                 elif any(x in subname for x in ["o_proj.weight", "gate_proj.weight", "up_proj.weight", "down_proj.weight"]):
                     weight = torch.block_diag(weight, weight)
                 elif "embed_tokens.weight" in subname:
@@ -213,6 +227,11 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 elif "norm.weight" in subname:
                     weight = torch.cat([weight, weight], dim=0)
 
+                if subname in expected_shapes:
+                    exp = expected_shapes[subname]
+                    if weight.shape != exp:
+                        print(f"MISMATCH: {subname} | LoadedExpanded: {weight.shape} | EngineExpected: {exp}")
+                
                 hf_llama_weights[subname] = weight
                 continue
             
