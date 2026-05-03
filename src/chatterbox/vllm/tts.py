@@ -306,8 +306,16 @@ class ChatterboxTTS:
         # ── 4. Allocate GPU memory (multilingual model is bigger) ─────────
         total_gpu_memory = torch.cuda.get_device_properties(0).total_memory
         unused_gpu_memory = total_gpu_memory - torch.cuda.memory_allocated()
-        vllm_memory_needed = (2.55 * 1024**3) + (max_batch_size * max_model_len * 1024 * 128)
+        
+        # Block-diagonal expansion quadrupled the LLaMA weight parameters!
+        # The model weights now take 3.83 GiB alone.
+        # We need to allocate at least 5 GiB + KV cache.
+        vllm_memory_needed = (5.5 * 1024**3) + (max_batch_size * max_model_len * 2048 * 128)
+        
         vllm_memory_percent = vllm_memory_needed / unused_gpu_memory
+        # Cap at 90% just to be safe
+        vllm_memory_percent = min(vllm_memory_percent, 0.90)
+        
         print(f"Giving vLLM {vllm_memory_percent * 100:.2f}% of GPU memory ({vllm_memory_needed / 1024**2:.2f} MB)")
 
         # ── 5. Start vLLM engine ──────────────────────────────────────────
