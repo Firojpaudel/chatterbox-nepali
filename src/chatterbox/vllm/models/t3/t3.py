@@ -311,7 +311,10 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         loaded_params: set[str] = set()
         state_dicts = {}
         hf_llama_weights = {}
-        for name, weight in weights:
+        for raw_name, weight in weights:
+            # Clean keys if they come from a different training script (e.g., DDP or PEFT wrappers)
+            name = raw_name.replace("patched_model.", "").replace("model.", "").replace("t3.", "")
+
             # Llama weights need to be passed through vllm's load_weights rather than load_state_dict
             if name.startswith("tfmr."):
                 subname = name[5:]
@@ -323,7 +326,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                         weight = torch.cat([weight, padding], dim=0)
                 hf_llama_weights[subname] = weight
                 continue
-            loaded_params.add(name)
+            loaded_params.add(raw_name)
             if '.' not in name:
                 continue
             attr, subname = name.split('.', 1)
@@ -668,8 +671,13 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             # We must explicitly use our own speech_emb.
             # However, during profiling, vLLM passes random dummy input_ids.
             # We can detect real decoding because all speech tokens will be >= SPEECH_TOKEN_OFFSET.
-            if (input_ids >= SPEECH_TOKEN_OFFSET).all():
+            is_decoding = (input_ids >= SPEECH_TOKEN_OFFSET).all()
+            print(f"[T3VllmModel] forward: inputs_embeds is None. input_ids shape: {input_ids.shape}, min: {input_ids.min()}, max: {input_ids.max()}, is_decoding: {is_decoding}")
+            print(f"[T3VllmModel] positions: {positions.tolist()}")
+            print(f"[T3VllmModel] kwargs keys: {list(kwargs.keys())}")
+            if is_decoding:
                 inputs_embeds = self.get_input_embeddings(input_ids, [])
+                print(f"[T3VllmModel] forward: generated inputs_embeds from speech_emb, shape: {inputs_embeds.shape}")
 
         if self.SAFE_MODE:
             # Delegate to self.tfmr (vLLM's LlamaModel) which handles:
