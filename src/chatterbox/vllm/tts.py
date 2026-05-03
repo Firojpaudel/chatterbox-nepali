@@ -2,6 +2,44 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union, Tuple, Any
 import time
+import json
+import shutil
+
+# Monkey-patch transformers to prevent vLLM from crashing on duplicate 'aimv2' registration
+import transformers
+from transformers.models.auto.configuration_auto import AutoConfig
+_original_register = AutoConfig.register
+def _new_register(model_type, config, exist_ok=False):
+    return _original_register(model_type, config, exist_ok=True)
+AutoConfig.register = _new_register
+
+def _patch_vllm_on_disk():
+    """Surgery: Permanently fix the vLLM 'aimv2' bug by patching the source code on disk."""
+    import os
+    import importlib.util
+    try:
+        spec = importlib.util.find_spec("vllm")
+        if spec is None or spec.origin is None:
+            return
+        vllm_dir = os.path.dirname(spec.origin)
+        ovis_path = os.path.join(vllm_dir, "transformers_utils", "configs", "ovis.py")
+        
+        if os.path.exists(ovis_path):
+            with open(ovis_path, "r") as f:
+                content = f.read()
+            
+            # The line causing the subprocess to crash
+            old_line = 'AutoConfig.register("aimv2", AIMv2Config)'
+            new_line = 'AutoConfig.register("aimv2", AIMv2Config, exist_ok=True)'
+            
+            if old_line in content and new_line not in content:
+                print(f"🩹 Applying permanent patch to vLLM at: {ovis_path}")
+                with open(ovis_path, "w") as f:
+                    f.write(content.replace(old_line, new_line))
+    except Exception as e:
+        print(f"Warning: Failed to dynamically patch vLLM: {e}")
+
+_patch_vllm_on_disk()
 
 from vllm import LLM, SamplingParams
 from functools import lru_cache
