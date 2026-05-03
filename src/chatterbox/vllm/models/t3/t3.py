@@ -242,7 +242,8 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                 if buffer:
                     buf_t = torch.tensor(buffer, device=input_ids.device)
                     if in_prefill:
-                        mme, remaining_mm = remaining_mm.split([len(buffer), len(remaining_mm) - len(buffer)], dim=0)
+                        sz = min(len(buffer), len(remaining_mm))
+                        mme, remaining_mm = remaining_mm.split([sz, len(remaining_mm) - sz], dim=0)
                         output.append((buf_t, mme))
                     else:
                         output.append((buf_t, None))
@@ -253,7 +254,8 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         if buffer:
             buf_t = torch.tensor(buffer, device=input_ids.device)
             if in_prefill:
-                mme, _ = remaining_mm.split([len(buffer), len(remaining_mm) - len(buffer)], dim=0)
+                sz = min(len(buffer), len(remaining_mm))
+                mme, _ = remaining_mm.split([sz, len(remaining_mm) - sz], dim=0)
                 output.append((buf_t, mme))
             else:
                 output.append((buf_t, None))
