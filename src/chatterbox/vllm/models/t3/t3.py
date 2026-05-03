@@ -209,39 +209,18 @@ class T3MultiModalProcessor(BaseMultiModalProcessor[T3ProcessingInfo]):
         assert len(conditionals) == 1, "Only one conditional embedding is supported for prefill"
         assert conditionals[0].shape[0] == CONDITIONING_SIZE, "Conditionals must be CONDITIONING_SIZE tokens long"
 
-        new_conditionals = torch.cat([
-            # First CONDITIONING_SIZE embeddings are the original conditionals
-            conditionals[0],
-
-            # The positions of the text ids are a triangular matrix of 1s
-            create_triangular_matrix(len(prompt_ids), conditionals[0].shape[1]).to(conditionals[0].device),
-
-            # The start of speech token is a vector of 0s,
-            torch.zeros(1, conditionals[0].shape[1]).to(conditionals[0].device),
-        ], dim=0)
-        assert len(new_conditionals) == len(final_prompt_ids), "Number of new conditionals does not match number of prompt ids"
-
-        new_mm_kwargs = MultiModalKwargs.from_items([
-            MultiModalKwargsItem.from_elems(
-                MultiModalBatchedField().build_elems(
-                    modality="conditionals",
-                    key="conditionals",
-                    data=[new_conditionals],
-                )
-            )
-        ])
-
+        new_conditionals = conditionals[0]
+        
         return MultiModalInputs(
             type="multimodal",
-            prompt=prompt, # It's unclear if this is actually used for anything. Don't change it for now.
+            prompt=prompt,
             prompt_token_ids=final_prompt_ids,
-            mm_kwargs=new_mm_kwargs,
+            mm_kwargs=MultiModalKwargs({"conditionals": [new_conditionals]}),
             mm_hashes={
                 # Assign a random hash for now, because we're not actually hashing the multimodal data.
                 "conditionals": [str(random.random())],
             },
             mm_placeholders={
-                # "conditionals": [PlaceholderRange(offset=0, length=CONDITIONING_SIZE, is_embed=None)]
                 # HACK: Tell vLLM that the conditionals modify the entire prompt. This will cause our hacked embeddings
                 #       to be injected into the entire prompt, rather than just the conditioning portion.
                 "conditionals": [PlaceholderRange(offset=0, length=len(final_prompt_ids), is_embed=None)]
@@ -651,31 +630,32 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                         # We don't have the conditioning portion, and we may only have part of the text portion.
                         # print("t3/get_input_embeddings/end of prefill block, no conditioning")
 
-                        # Everything except the last token is the text portion.
-                        text_ids = ids[:-1]
+                        # conditioning_emb is the first 34 tokens of the sequence.
+                        conditioning_emb = multimodal_embedding # (34, 1024)
                         
-                        # Extract the position IDs for the text portion by counting the number of 1s (minus 1) in the multimodal embedding
-                        # that was injected via our hack above.
-                        text_pos = (torch.sum(multimodal_embedding[0:len(text_ids)], dim=1) - 1).long()
+                        text_ids = ids[1:-1]
                         
-                        # DEBUG: Log prefill text positions
+                        # DEBUG: Log prefill text length
                         if getattr(self, '_log_prefill', True):
-                            print(f"DEBUG: get_input_embeddings (Prefill) - text_len: {len(text_ids)}, text_pos_range: {text_pos.min().item()}-{text_pos.max().item()}")
+                            print(f"DEBUG: get_input_embeddings (Prefill) - text_len: {len(text_ids)}")
                             self._log_prefill = False
 
-                        text_emb = self.text_emb(text_ids) + self.precomputed_text_pos_emb[text_pos]
+                        # Standard text embeddings + positional embeddings
+                        text_emb = self.text_emb(text_ids) + self.precomputed_text_pos_emb[0:len(text_ids)]
 
                         start_of_speech_token = torch.tensor([self.t3conf.start_speech_token]).to(ids.device)
+                        # The first speech token (start of speech) is always at position 0 in the speech positional embeddings
                         start_of_speech_emb = self.speech_emb(start_of_speech_token.unsqueeze(0))[0]  + self.precomputed_speech_pos_emb[0:1]
                         
-                        cond_embeds = torch.cat([text_emb, start_of_speech_emb], dim=0)
+                        # CORRECT ORDER: [Conditioning (34), Text (N), Start-of-Speech (1)]
+                        cond_embeds = torch.cat([conditioning_emb, text_emb, start_of_speech_emb], dim=0)
                         
-                        # Unconditional text stream needs positional embeddings, but token embeddings are zeroed!
-                        uncond_text_emb = self.precomputed_text_pos_emb[text_pos.tolist()]
-                        uncond_embeds = torch.cat([uncond_text_emb, start_of_speech_emb], dim=0)
+                        # Unconditional stream: Same conditioning, ZEROED text tokens (but with positions), Same start-of-speech
+                        uncond_text_emb = self.precomputed_text_pos_emb[0:len(text_ids)]
+                        uncond_embeds = torch.cat([conditioning_emb, uncond_text_emb, start_of_speech_emb], dim=0)
                         
                         final_embeds = torch.cat([cond_embeds, uncond_embeds], dim=1)
-                        assert len(final_embeds) == len(ids), "Number of output elements does not match number of input elements"
+                        assert len(final_embeds) == len(ids), f"Length mismatch: {len(final_embeds)} vs {len(ids)}"
                         out.append(final_embeds)
 
                 else:
