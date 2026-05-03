@@ -353,8 +353,11 @@ class ChatterboxTTS:
             except Exception:
                 config_repo_path = None
         
-        # 2. Download Nepali weights
-        nepali_path = hf_hub_download(repo_id=model_repo_id, filename=model_filename)
+        # 2. Download/Get the fine-tuned T3 model
+        if os.path.exists(model_filename):
+            nepali_path = model_filename
+        else:
+            nepali_path = hf_hub_download(repo_id=model_repo_id, filename=model_filename)
         
         # 3. Create an isolated directory for vLLM
         vllm_cache_dir = Path(os.path.expanduser("~/.cache/chatterbox_vllm_nepali"))
