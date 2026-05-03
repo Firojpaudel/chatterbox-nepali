@@ -304,7 +304,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         is_multilingual = getattr(hf_cfg, 'is_multilingual', False)
 
         self.t3conf = T3Config.multilingual() if is_multilingual else T3Config()
-        self.dim = self.t3conf.n_channels
+        self.dim = 1024
         self.cond_enc = T3CondEnc(self.t3conf)
         self.text_emb = nn.Embedding(self.t3conf.text_tokens_dict_size, self.dim)
         self.speech_emb = nn.Embedding(self.t3conf.speech_tokens_dict_size, self.dim)
