@@ -615,7 +615,10 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                         conditioning_emb = multimodal_embedding[:indices[0]+1]
                         
                         cond_embeds = torch.cat([conditioning_emb, text_emb, start_of_speech_emb], dim=0)
-                        uncond_embeds = torch.cat([conditioning_emb, torch.zeros_like(text_emb), start_of_speech_emb], dim=0)
+                        
+                        # Unconditional text stream needs positional embeddings, but token embeddings are zeroed!
+                        uncond_text_emb = self.precomputed_text_pos_emb[0:len(text_ids)]
+                        uncond_embeds = torch.cat([conditioning_emb, uncond_text_emb, start_of_speech_emb], dim=0)
 
                         final_embeds = torch.cat([cond_embeds, uncond_embeds], dim=1)
                         # assert len(final_embeds) == len(ids), "Number of output elements does not match number of input elements"
@@ -637,7 +640,11 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                         start_of_speech_emb = self.speech_emb(start_of_speech_token.unsqueeze(0))[0]  + self.precomputed_speech_pos_emb[0:1]
                         
                         cond_embeds = torch.cat([text_emb, start_of_speech_emb], dim=0)
-                        uncond_embeds = torch.cat([torch.zeros_like(text_emb), start_of_speech_emb], dim=0)
+                        
+                        # Unconditional text stream needs positional embeddings, but token embeddings are zeroed!
+                        uncond_text_emb = self.precomputed_text_pos_emb[text_pos.tolist()]
+                        uncond_embeds = torch.cat([uncond_text_emb, start_of_speech_emb], dim=0)
+                        
                         final_embeds = torch.cat([cond_embeds, uncond_embeds], dim=1)
                         assert len(final_embeds) == len(ids), "Number of output elements does not match number of input elements"
                         out.append(final_embeds)
