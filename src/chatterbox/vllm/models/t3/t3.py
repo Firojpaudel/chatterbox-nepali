@@ -382,8 +382,14 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     yield subname, new_weight
                     del new_weight
                 elif "embed_tokens.weight" in subname:
-                    new_weight = torch.cat([weight, weight], dim=1)
-                    yield subname, new_weight
+                    # weight is [8, 1024]. Expand to [8, 2048]
+                    expanded_weight = torch.cat([weight, weight], dim=1)
+                    # Pad to the full 32000 vocab size we defined in config
+                    final_weight = torch.zeros((32000, expanded_weight.shape[1]), 
+                                              device=expanded_weight.device, 
+                                              dtype=expanded_weight.dtype)
+                    final_weight[:expanded_weight.shape[0]] = expanded_weight
+                    yield subname, final_weight
                     del new_weight
                 else:
                     yield subname, weight
@@ -577,6 +583,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     # Generate version with both text and no-text embeddings for CFG
                     conditioning_emb = multimodal_embedding[0:CONDITIONING_SIZE]
                     cond_embeds = torch.cat([conditioning_emb, text_emb, start_of_speech_emb], dim=0)
+                    # Unconditional stream MUST have zeroed text to diverge
                     uncond_embeds = torch.cat([conditioning_emb, torch.zeros_like(text_emb), start_of_speech_emb], dim=0)
 
                     # Concatenate into one giant tensor, which will be split in the forward pass
@@ -721,10 +728,18 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
              self._log_final_logits = getattr(self, '_log_final_logits', 0) + 1
     
         # HACK: Offset the logits so the resulting speech token is +SPEECH_TOKEN_OFFSET from the normal speech tokens.
-        # Use -inf instead of zeros to ensure these padding tokens can never be selected
         padding = torch.full((logits.shape[0], SPEECH_TOKEN_OFFSET), float('-inf'), 
                              dtype=logits.dtype, device=logits.device)
         logits = torch.cat([padding, logits], dim=1)
+        
+        # Pad up to the full 32000 vocab size expected by vLLM config
+        if logits.shape[1] < 32000:
+            extra_padding = torch.full((logits.shape[0], 32000 - logits.shape[1]), float('-inf'), 
+                                      dtype=logits.dtype, device=logits.device)
+            logits = torch.cat([logits, extra_padding], dim=1)
+        elif logits.shape[1] > 32000:
+            logits = logits[:, :32000]
+            
         return logits
 
 
