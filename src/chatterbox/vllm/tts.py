@@ -327,6 +327,7 @@ class ChatterboxTTS:
             "gpu_memory_utilization": vllm_memory_percent,
             "enforce_eager": not compile,
             "max_model_len": max_model_len,
+            "swap_space": 0, # Disable the 4 GiB CPU Swap Space allocation to save System RAM
         }
         t3 = LLM(**{**base_vllm_kwargs, **kwargs})
 
