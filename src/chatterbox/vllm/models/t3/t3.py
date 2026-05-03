@@ -328,6 +328,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
         self.cfg_scale = float(os.environ.get("CHATTERBOX_CFG_SCALE", "1.5"))
         print("Applying CFG scale:", self.cfg_scale)
+        self.prompt_len_cache = {}
 
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
@@ -474,14 +475,24 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                                 dtype=self.speech_head.weight.dtype, 
                                 device=input_ids.device)
 
+        # Get the unique ID for this request's conditioning data
+        cond_tensor = multimodal_embeddings[0] if (multimodal_embeddings and len(multimodal_embeddings) > 0) else None
+        cond_id = id(cond_tensor) if cond_tensor is not None else None
+
         if input_ids is not None and (input_ids >= SPEECH_TOKEN_OFFSET).any():
-            if multimodal_embeddings is None or len(multimodal_embeddings) == 0:
-                speech_ids = torch.clamp(input_ids - SPEECH_TOKEN_OFFSET, min=0)
-                embeds = self.speech_emb(speech_ids)
-                pos_indices = positions.clamp(0, self.t3conf.max_speech_tokens + 3)
-                embeds = embeds + self.precomputed_speech_pos_emb[pos_indices]
-                out = torch.cat([embeds, embeds], dim=1)
-                return out
+            speech_ids = torch.clamp(input_ids - SPEECH_TOKEN_OFFSET, min=0)
+            embeds = self.speech_emb(speech_ids)
+            
+            # Use cached prompt length to calculate relative speech position
+            prompt_len = 36 + 20 # Conservative fallback
+            if cond_id in self.prompt_len_cache:
+                prompt_len = self.prompt_len_cache[cond_id]
+            
+            rel_pos = (positions - prompt_len).clamp(min=0)
+            embeds = embeds + self.precomputed_speech_pos_emb[rel_pos]
+            
+            out = torch.cat([embeds, embeds], dim=1)
+            return out
         else:
             out = []
             for ids, multimodal_embedding, block_positions in self.split_prefill_decode(input_ids, multimodal_embeddings, positions):
@@ -544,7 +555,11 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
                     # Concatenate into one giant tensor, which will be split in the forward pass
                     final_embeds = torch.cat([cond_embeds, uncond_embeds], dim=1)
-                    # assert len(final_embeds) == len(ids), "Number of output elements does not match number of input elements"
+                    
+                    # Store prompt length for decoding stage positional alignment
+                    if cond_id is not None:
+                         self.prompt_len_cache[cond_id] = ids.shape[0]
+                         
                     out.append(final_embeds)
                 elif ids[0] == PREFILL_COND_START_TOKEN:
                     # We have the start of the prefill block.
