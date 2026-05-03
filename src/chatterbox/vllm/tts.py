@@ -126,7 +126,7 @@ MULTILINGUAL_VLLM_CONFIG = {
     },
     "tie_word_embeddings": False,
     "torch_dtype": "float16",
-    "use_cache": true,
+    "use_cache": True,    
     "vocab_size": 8
 }
 
