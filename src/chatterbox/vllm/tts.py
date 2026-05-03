@@ -179,9 +179,11 @@ class ChatterboxTTS:
         unused_gpu_memory = total_gpu_memory - torch.cuda.memory_allocated()
         vllm_memory_needed = (1.55*1024*1024*1024) + (max_batch_size * max_model_len * 1024 * 128)
         vllm_memory_percent = vllm_memory_needed / unused_gpu_memory
-        # Ensure vLLM gets at least 60% of GPU memory — the dynamic calculation can be
-        # too conservative when CUDA cache isn't fully cleared after unloading models
-        vllm_memory_percent = max(vllm_memory_percent, 0.6)
+        # Ensure vLLM gets enough memory but NOT too much — s3gen (~1GB), ve, and
+        # inference working memory also need GPU space. On T4 (15GB):
+        #   0.40 * 14.56GB = 5.8GB for vLLM (1GB model + 4.8GB KV cache)
+        #   Leaves ~9GB for s3gen, audio decode, and working memory
+        vllm_memory_percent = max(vllm_memory_percent, 0.40)
         
         # We assume the model dir for vLLM is the same as ckpt_dir or contains the weights
         # vLLM expects a directory with model.safetensors/config.json etc.
