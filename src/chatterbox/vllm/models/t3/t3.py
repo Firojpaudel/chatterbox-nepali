@@ -438,8 +438,10 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     cur_ids = torch.stack(id_buffer).to(input_ids.device)
                     cur_pos = torch.stack(pos_buffer).to(input_ids.device)
                     if in_prefill_block and remaining_multimodal_embeddings is not None:
-                        mme, remaining_multimodal_embeddings = remaining_multimodal_embeddings\
-                            .split([len(id_buffer), len(remaining_multimodal_embeddings) - len(id_buffer)], dim=0)
+                        # CONDITIONING: Only take the 34 embeddings we provided
+                        take_n = min(len(remaining_multimodal_embeddings), CONDITIONING_SIZE)
+                        mme = remaining_multimodal_embeddings[:take_n]
+                        remaining_multimodal_embeddings = remaining_multimodal_embeddings[take_n:]
                         output.append((cur_ids, mme, cur_pos))
                     else:
                         output.append((cur_ids, None, cur_pos))
@@ -455,8 +457,9 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             cur_ids = torch.stack(id_buffer).to(input_ids.device)
             cur_pos = torch.stack(pos_buffer).to(input_ids.device)
             if in_prefill_block and remaining_multimodal_embeddings is not None:
-                mme, remaining_multimodal_embeddings = remaining_multimodal_embeddings\
-                    .split([len(id_buffer), len(remaining_multimodal_embeddings) - len(id_buffer)], dim=0)
+                take_n = min(len(remaining_multimodal_embeddings), CONDITIONING_SIZE)
+                mme = remaining_multimodal_embeddings[:take_n]
+                remaining_multimodal_embeddings = remaining_multimodal_embeddings[take_n:]
                 output.append((cur_ids, mme, cur_pos))
             else:
                 output.append((cur_ids, None, cur_pos))
@@ -521,17 +524,23 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
 
                     # The first 34 tokens are the cond portion. The remainder, except for the last token are the text
                     # portion. The last token is a placeholder for the start of speech token.
-                    text_ids = ids[CONDITIONING_SIZE:-1]
-                    text_emb = self.text_emb(text_ids) + self.precomputed_text_pos_emb[0:len(text_ids)]
+                    # Alignment fix: Start token [0], Cond [1..34], Text [35..-1], Stop [-1]
+                    start_token_emb = self.text_emb(ids[0:1])
+                    text_ids = ids[CONDITIONING_SIZE+1:-1]
+                    text_token_emb = self.text_emb(text_ids)
+                    text_pos_emb = self.precomputed_text_pos_emb[0:len(text_ids)]
+                    text_emb = text_token_emb + text_pos_emb
 
                     start_of_speech_token = torch.tensor([self.t3conf.start_speech_token]).to(ids.device)
                     start_of_speech_emb = self.speech_emb(start_of_speech_token.unsqueeze(0))[0] + self.precomputed_speech_pos_emb[0:1]
 
                     # Generate version with both text and no-text embeddings for CFG
                     conditioning_emb = multimodal_embedding[0:CONDITIONING_SIZE]
-                    cond_embeds = torch.cat([conditioning_emb, text_emb, start_of_speech_emb], dim=0)
-                    # Unconditional stream MUST have zeroed text to diverge
-                    uncond_embeds = torch.cat([conditioning_emb, torch.zeros_like(text_emb), start_of_speech_emb], dim=0)
+                    conditioning_emb = conditioning_emb.to(start_token_emb.device, dtype=start_token_emb.dtype)
+                    cond_embeds = torch.cat([start_token_emb, conditioning_emb, text_emb, start_of_speech_emb], dim=0)
+                    # Unconditional stream MUST have zeroed text but RETAINED positions!
+                    uncond_text_emb = self.precomputed_text_pos_emb[0:len(text_ids)]
+                    uncond_embeds = torch.cat([start_token_emb, conditioning_emb, uncond_text_emb, start_of_speech_emb], dim=0)
 
                     # Concatenate into one giant tensor, which will be split in the forward pass
                     final_embeds = torch.cat([cond_embeds, uncond_embeds], dim=1)
