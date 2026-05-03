@@ -194,6 +194,12 @@ class ChatterboxTTS:
         for f in files:
             paths[f] = hf_hub_download(repo_id=repo_id, filename=f, revision=revision)
         
+        # Attempt to download config.json
+        try:
+            config_repo_path = hf_hub_download(repo_id=repo_id, filename="config.json", revision=revision)
+        except Exception:
+            config_repo_path = None
+
         # Create an isolated directory for vLLM so we don't corrupt the HF cache
         vllm_cache_dir = Path(os.path.expanduser(f"~/.cache/chatterbox_vllm_{variant}"))
         vllm_cache_dir.mkdir(parents=True, exist_ok=True)
@@ -205,6 +211,32 @@ class ChatterboxTTS:
                 dest.symlink_to(path)
             except Exception:
                 shutil.copy(path, dest)
+        
+        # Ensure config.json exists
+        config_dest = vllm_cache_dir / "config.json"
+        if config_repo_path:
+            config_dest.unlink(missing_ok=True)
+            try:
+                config_dest.symlink_to(config_repo_path)
+            except Exception:
+                shutil.copy(config_repo_path, config_dest)
+        else:
+            import json
+            config_data = {
+                "model_type": "ChatterboxT3",
+                "architectures": ["T3VllmModel"],
+                "hidden_size": 1024,
+                "num_attention_heads": 16,
+                "num_hidden_layers": 24,
+                "intermediate_size": 4096,
+                "max_position_embeddings": 2048,
+                "vocab_size": 2500,
+                "tokenizer": "EnTokenizer" if variant == "english" else "MtlTokenizer",
+                "torch_dtype": "float16"
+            }
+            with open(config_dest, "w") as f:
+                json.dump(config_data, f, indent=2)
+            print(f"Generated default vLLM config at {config_dest}")
                 
         model_path = vllm_cache_dir / "model.safetensors"
         model_path.unlink(missing_ok=True)
@@ -230,6 +262,12 @@ class ChatterboxTTS:
         base_paths = {}
         for f in base_files:
             base_paths[f] = hf_hub_download(repo_id=base_repo_id, filename=f, revision="05e904af2b5c7f8e482687a9d7336c5c824467d9")
+
+        # Attempt to download config.json, but don't fail if it's missing (we'll generate it)
+        try:
+            config_repo_path = hf_hub_download(repo_id=base_repo_id, filename="config.json", revision="05e904af2b5c7f8e482687a9d7336c5c824467d9")
+        except Exception:
+            config_repo_path = None
         
         # 2. Download Nepali weights
         nepali_path = hf_hub_download(repo_id=model_repo_id, filename=model_filename)
@@ -246,6 +284,32 @@ class ChatterboxTTS:
             except Exception:
                 shutil.copy(path, dest)
 
+        # Ensure config.json exists (ESSENTIAL for vLLM to recognize the architecture)
+        config_dest = vllm_cache_dir / "config.json"
+        if config_repo_path:
+            config_dest.unlink(missing_ok=True)
+            try:
+                config_dest.symlink_to(config_repo_path)
+            except Exception:
+                shutil.copy(config_repo_path, config_dest)
+        else:
+            import json
+            config_data = {
+                "model_type": "ChatterboxT3",
+                "architectures": ["T3VllmModel"],
+                "hidden_size": 1024,
+                "num_attention_heads": 16,
+                "num_hidden_layers": 24,
+                "intermediate_size": 4096,
+                "max_position_embeddings": 2048,
+                "vocab_size": 2500,
+                "tokenizer": "MtlTokenizer",
+                "torch_dtype": "float16"
+            }
+            with open(config_dest, "w") as f:
+                json.dump(config_data, f, indent=2)
+            print(f"Generated default vLLM config at {config_dest}")
+        
         model_vllm_path = vllm_cache_dir / "model.safetensors"
         model_vllm_path.unlink(missing_ok=True)
         
