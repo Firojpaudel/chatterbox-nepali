@@ -320,7 +320,7 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                     new_weight[:dim0, :dim1] = weight
                     new_weight[dim0:, dim1:] = weight
                     hf_llama_weights[subname] = new_weight
-                elif any(x in subname for x in ["input_layernorm.weight", "post_attention_layernorm.weight", "model.norm.weight", "model.norm.bias"]):
+                elif any(x in subname for x in ["input_layernorm.weight", "post_attention_layernorm.weight", "norm.weight", "norm.bias"]):
                     # Layer norms and biases are 1D vectors: [W, W]
                     hf_llama_weights[subname] = torch.cat([weight, weight], dim=0)
                 elif "embed_tokens.weight" in subname:
