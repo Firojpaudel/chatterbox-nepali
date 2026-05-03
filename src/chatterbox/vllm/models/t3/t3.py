@@ -650,9 +650,11 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                         # CORRECT ORDER: [Conditioning (34), Text (N), Start-of-Speech (1)]
                         cond_embeds = torch.cat([conditioning_emb, text_emb, start_of_speech_emb], dim=0)
                         
-                        # Unconditional stream: Same conditioning, ZEROED text tokens (but with positions), Same start-of-speech
-                        uncond_text_emb = self.precomputed_text_pos_emb[0:len(text_ids)]
-                        uncond_embeds = torch.cat([conditioning_emb, uncond_text_emb, start_of_speech_emb], dim=0)
+                        # DIAGNOSTIC TEST: Force the unconditional stream to be ZEROS (except start-of-speech)
+                        # This should make the uncond stream completely different.
+                        # If the output is still identical, the backbone is mixing them.
+                        uncond_text_emb = torch.zeros_like(text_emb)
+                        uncond_embeds = torch.cat([torch.zeros_like(conditioning_emb), uncond_text_emb, start_of_speech_emb], dim=0)
                         
                         final_embeds = torch.cat([cond_embeds, uncond_embeds], dim=1)
                         assert len(final_embeds) == len(ids), f"Length mismatch: {len(final_embeds)} vs {len(ids)}"
@@ -677,6 +679,11 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
     def compute_logits(self, hidden_states: torch.Tensor, sampling_metadata: SamplingMetadata) -> torch.Tensor:
         # Split the hidden state vector into the three parts
         cond_hidden_states, uncond_hidden_states = hidden_states.split([self.dim, self.dim], dim=1)
+        
+        # DEBUG: Log raw hidden states for exact comparison
+        if cond_hidden_states.numel() > 0:
+            print(f"DEBUG: RAW Cond Hidden[0, :5]: {cond_hidden_states[0, :5].detach().cpu().tolist()}")
+            print(f"DEBUG: RAW Uncond Hidden[0, :5]: {uncond_hidden_states[0, :5].detach().cpu().tolist()}")
 
         # DIAGNOSTIC LOGGING
         if getattr(self, '_log_count', 0) < 5:
