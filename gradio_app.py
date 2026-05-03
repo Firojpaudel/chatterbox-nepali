@@ -21,7 +21,8 @@ if SRC_PATH not in sys.path:
 
 import chatterbox.utils.sanitizer as sanitizer
 from chatterbox.utils.sanitizer import sanitize_text
-from chatterbox.mtl_tts import ChatterboxMultilingualTTS, Conditionals
+from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+from chatterbox.vllm.tts import ChatterboxTTS
 
 print(f"--- STARTUP CONFIG ---")
 print(f"DEBUG: Using sanitizer from: {sanitizer.__file__}")
@@ -83,6 +84,7 @@ INSERT_TAG_JS = """
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 model = None
+vllm_model = None
 BASE_T3_STATE = None
 # We no longer pre-load states to save RAM
 CURRENT_MODEL_TYPE = "nepali-final"
@@ -108,37 +110,46 @@ import copy
 # We only store the filenames, not the actual weights, to save RAM
 FINETUNE_FILES = {}
 
-def get_or_load_model():
-    global model, BASE_T3_STATE, CURRENT_MODEL_TYPE, FINETUNE_FILES
-    if model is not None: return model
-
-    print("Loading Chatterbox Multilingual v2 base model...")
-    model = ChatterboxMultilingualTTS.from_pretrained(DEVICE)
-    model.t3.eval()
+def get_or_load_model(use_vllm=False):
+    global model, vllm_model, BASE_T3_STATE, CURRENT_MODEL_TYPE, FINETUNE_FILES
     
-    # Save a copy of the base T3 state for switching back
-    print("Caching base T3 state...")
-    BASE_T3_STATE = {k: v.cpu().clone() for k, v in model.t3.state_dict().items()}
-    
-    # Identify available checkpoints but DON'T load them yet
-    for name, filename in CHECKPOINTS.items():
-        if not os.path.exists(filename):
-            try:
-                hf_hub_download(repo_id=REPO_ID, filename=filename, local_dir=".")
-            except Exception as e:
-                print(f"Could not download {filename}: {e}")
-                continue
+    if use_vllm:
+        if vllm_model is not None: return vllm_model
+        print("Loading Chatterbox vLLM model...")
+        # For vLLM, we use the specialized loader
+        # We assume 'nepali-merged' or 'nepali-final' as default
+        model_name = CHECKPOINTS.get(CURRENT_MODEL_TYPE, "t3_mtl_nepali_merged.safetensors")
+        vllm_model = ChatterboxTTS.from_nepali(model_filename=model_name)
+        return vllm_model
+    else:
+        if model is not None: return model
+        print("Loading Chatterbox Multilingual v2 base model...")
+        model = ChatterboxMultilingualTTS.from_pretrained(DEVICE)
+        model.t3.eval()
         
-        if os.path.exists(filename):
-            FINETUNE_FILES[name] = filename
-            print(f"Registered checkpoint: {name} ({filename})")
+        # Save a copy of the base T3 state for switching back
+        print("Caching base T3 state...")
+        BASE_T3_STATE = {k: v.cpu().clone() for k, v in model.t3.state_dict().items()}
+        
+        # Identify available checkpoints but DON'T load them yet
+        for name, filename in CHECKPOINTS.items():
+            if not os.path.exists(filename):
+                try:
+                    hf_hub_download(repo_id=REPO_ID, filename=filename, local_dir=".")
+                except Exception as e:
+                    print(f"Could not download {filename}: {e}")
+                    continue
+            
+            if os.path.exists(filename):
+                FINETUNE_FILES[name] = filename
+                print(f"Registered checkpoint: {name} ({filename})")
 
-    # Load the default model (nepali-final) on demand
-    if "nepali-final" in FINETUNE_FILES:
-        print("Loading default Nepali model (nepali-final)...")
-        switch_model("nepali-final")
-    
-    return model
+        # Load the default model (nepali-final) on demand
+        if "nepali-final" in FINETUNE_FILES:
+            print("Loading default Nepali model (nepali-final)...")
+            switch_model("nepali-final")
+        
+        return model
 
 def switch_model(model_type):
     global CURRENT_MODEL_TYPE, model, BASE_T3_STATE, FINETUNE_FILES
@@ -155,6 +166,12 @@ def switch_model(model_type):
             filename = FINETUNE_FILES[model_type]
             print(f"--- Loading weights for: {model_type} ({filename}) ---")
             
+            # Reset vLLM model if it exists, so it reloads with new weights next time
+            global vllm_model
+            if vllm_model is not None:
+                vllm_model.shutdown()
+                vllm_model = None
+
             if filename.endswith(".safetensors"):
                 from safetensors.torch import load_file
                 state = load_file(filename, device="cpu")
@@ -163,9 +180,10 @@ def switch_model(model_type):
             
             clean_state = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in state.items()}
             
-            model.t3.load_state_dict(clean_state, strict=False)
-            model.t3.to(DEVICE).eval()
-            model.t3.compiled = False
+            if model is not None:
+                model.t3.load_state_dict(clean_state, strict=False)
+                model.t3.to(DEVICE).eval()
+                model.t3.compiled = False
             
             # Immediately delete state to free RAM
             del state
@@ -226,7 +244,7 @@ def generate_tts_audio(
     text_input, language_id, ref_dropdown_input, audio_prompt_input,
     exaggeration_input, cfg_weight_input, temperature_input,
     seed_num_input, enable_sanitizer, enable_chunking, enable_protection, speed_input,
-    repetition_penalty_input, top_p_input, min_p_input
+    repetition_penalty_input, top_p_input, min_p_input, use_vllm
 ):
     model = get_or_load_model()
     ref_path = audio_prompt_input or os.path.join("samples", ref_dropdown_input)
@@ -239,36 +257,51 @@ def generate_tts_audio(
     chunks = smart_chunk(text_input) if enable_chunking else [text_input]
     print(f"Split into {len(chunks)} chunk(s). Starting synthesis...")
 
-    model.prepare_conditionals(wav_fpath=ref_path, exaggeration=exaggeration_input)
-    
-    if seed_num_input != 0:
-        set_seed(int(seed_num_input))
+    if use_vllm:
+        # vLLM handles everything in one batch
+        print("Using vLLM for inference...")
+        if seed_num_input != 0:
+            set_seed(int(seed_num_input))
+            
+        audios = model.generate(
+            chunks,
+            audio_prompt_path=ref_path,
+            language_id=language_id,
+            exaggeration=exaggeration_input,
+            temperature=temperature_input,
+            top_p=top_p_input,
+            repetition_penalty=repetition_penalty_input,
+            max_tokens=max(512, int(max(len(c) for c in chunks) * 4))
+        )
+        all_wavs = [a.squeeze(0).cpu().numpy() for a in audios]
+    else:
+        model.prepare_conditionals(wav_fpath=ref_path, exaggeration=exaggeration_input)
+        
+        if seed_num_input != 0:
+            set_seed(int(seed_num_input))
 
-    all_wavs = []
-    total_start = time.time()
-    
-    for i, chunk in enumerate(chunks):
-        if not chunk.strip(): continue
-        
-        chunk_start = time.time()
-        print(f"[Processing Chunk {i+1}/{len(chunks)}]")
-        print(f"   {chunk.strip()[:100]}")
-        
-        # Add tiny trailing space
-        if not chunk.endswith(" "): chunk += " "
-        
-        with torch.no_grad():
-            wav = model.generate(
-                chunk, language_id=language_id, exaggeration=exaggeration_input,
-                cfg_weight=cfg_weight_input, temperature=temperature_input,
-                repetition_penalty=repetition_penalty_input, top_p=top_p_input,
-                min_p=min_p_input, max_new_tokens=max(128, int(len(chunk) * 4)),
-                enable_protection=enable_protection
-            )
-            all_wavs.append(wav.squeeze(0).cpu().numpy())
-        
-        chunk_elapsed = time.time() - chunk_start
-        print(f"   Chunk {i+1} done in {chunk_elapsed:.1f}s")
+        all_wavs = []
+        for i, chunk in enumerate(chunks):
+            if not chunk.strip(): continue
+            
+            chunk_start = time.time()
+            print(f"[Processing Chunk {i+1}/{len(chunks)}]")
+            
+            # Add tiny trailing space
+            if not chunk.endswith(" "): chunk += " "
+            
+            with torch.no_grad():
+                wav = model.generate(
+                    chunk, language_id=language_id, exaggeration=exaggeration_input,
+                    cfg_weight=cfg_weight_input, temperature=temperature_input,
+                    repetition_penalty=repetition_penalty_input, top_p=top_p_input,
+                    min_p=min_p_input, max_new_tokens=max(128, int(len(chunk) * 4)),
+                    enable_protection=enable_protection
+                )
+                all_wavs.append(wav.squeeze(0).cpu().numpy())
+            
+            chunk_elapsed = time.time() - chunk_start
+            print(f"   Chunk {i+1} done in {chunk_elapsed:.1f}s")
 
     if not all_wavs: return None
     
@@ -300,6 +333,7 @@ with gr.Blocks(title="Chatterbox Nepali TTS", css=CUSTOM_CSS) as demo:
                 enable_sanitizer = gr.Checkbox(label="Aggressive Sanitizer", value=True)
                 enable_chunking = gr.Checkbox(label="Smart Chunking", value=True)
                 enable_protection = gr.Checkbox(label="Hallucination Protection", value=True)
+                use_vllm = gr.Checkbox(label="Enable vLLM (Fast Inference)", value=False)
             
             with gr.Row():
                 language_id = gr.Dropdown(choices=list(SUPPORTED_LANGUAGES.keys()), value="ne", label="Language")
@@ -338,15 +372,15 @@ with gr.Blocks(title="Chatterbox Nepali TTS", css=CUSTOM_CSS) as demo:
         inputs=[text, language_id, ref_dropdown]
     )
 
-    def load_wrapper(): 
-        get_or_load_model()
+    def load_wrapper(use_vllm): 
+        get_or_load_model(use_vllm=use_vllm)
         return None
 
-    demo.load(fn=load_wrapper, outputs=None)
+    demo.load(fn=load_wrapper, inputs=[use_vllm], outputs=None)
     model_selector.change(fn=switch_model, inputs=[model_selector], outputs=[model_status])
     run_btn.click(
         fn=generate_tts_audio,
-        inputs=[text, language_id, ref_dropdown, ref_wav, exaggeration, cfg_weight, temp, seed_num, enable_sanitizer, enable_chunking, enable_protection, speed_slider, repetition_penalty, top_p, min_p],
+        inputs=[text, language_id, ref_dropdown, ref_wav, exaggeration, cfg_weight, temp, seed_num, enable_sanitizer, enable_chunking, enable_protection, speed_slider, repetition_penalty, top_p, min_p, use_vllm],
         outputs=[audio_output]
     )
 
