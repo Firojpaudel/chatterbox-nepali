@@ -311,9 +311,23 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         loaded_params: set[str] = set()
         state_dicts = {}
         hf_llama_weights = {}
+        
+        counts = {"tfmr": 0, "cond_enc": 0, "text_emb": 0, "speech_emb": 0, "pos_emb": 0, "speech_head": 0, "other": 0}
+        
+        print(f"--- T3 Weight Loading Started ---")
+        sample_keys = []
+        total_weights = 0
         for raw_name, weight in weights:
-            # Clean keys if they come from a different training script (e.g., DDP or PEFT wrappers)
-            name = raw_name.replace("patched_model.", "").replace("model.", "").replace("t3.", "")
+            total_weights += 1
+            # Clean keys more aggressively
+            name = raw_name
+            while name.startswith("model.") or name.startswith("patched_model.") or name.startswith("t3."):
+                if name.startswith("model."): name = name[6:]
+                elif name.startswith("patched_model."): name = name[14:]
+                elif name.startswith("t3."): name = name[3:]
+            
+            if len(sample_keys) < 10:
+                sample_keys.append(f"{raw_name} -> {name}")
 
             # Llama weights need to be passed through vllm's load_weights rather than load_state_dict
             if name.startswith("tfmr."):
@@ -325,22 +339,48 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                         padding = torch.zeros((target_vocab - weight.shape[0], weight.shape[1]), dtype=weight.dtype, device=weight.device)
                         weight = torch.cat([weight, padding], dim=0)
                 hf_llama_weights[subname] = weight
+                counts["tfmr"] += 1
                 continue
+            
             loaded_params.add(raw_name)
             if '.' not in name:
+                counts["other"] += 1
                 continue
+                
             attr, subname = name.split('.', 1)
+            
+            # Track counts for debugging
+            if attr in counts: counts[attr] += 1
+            elif "pos_emb" in attr: counts["pos_emb"] += 1
+            else: counts["other"] += 1
+
             state_dict = state_dicts.get(attr, {})
             state_dict[subname] = weight
             state_dicts[attr] = state_dict
 
+        # Load weights into sub-modules
         for attr, state_dict in state_dicts.items():
             if hasattr(self, attr):
-                # print("Loading weights:", attr, state_dict.keys())
-                getattr(self, attr).load_state_dict(state_dict)
+                getattr(self, attr).load_state_dict(state_dict, strict=False)
 
+        # Load Llama weights using vLLM's specialized loader
         llama_loaded_params = self.tfmr.load_weights(hf_llama_weights.items())
         loaded_params.update('tfmr.' + i for i in llama_loaded_params)
+
+        print(f"--- T3 Weight Load Summary ---")
+        print(f"  Total weights in file: {total_weights}")
+        print(f"  Sample keys (first 10): {sample_keys}")
+        print(f"  Backbone (tfmr): {counts['tfmr']} params")
+        print(f"  Conditioning:    {counts['cond_enc']} params")
+        print(f"  Embeddings:      Text={counts['text_emb']}, Speech={counts['speech_emb']}")
+        print(f"  Heads/Other:     {counts['speech_head']} / {counts['other']}")
+        
+        if counts['tfmr'] == 0:
+            print("❌ CRITICAL WARNING: No backbone (tfmr) weights were loaded! The model will generate random noise.")
+            print("   Check if your weights file keys start with 'tfmr.', 'model.tfmr.', etc.")
+        else:
+            print(f"✅ Successfully loaded {counts['tfmr']} backbone parameters.")
+        print(f"-------------------------------")
 
         # Precompute text positional embeddings
         text_position_ids = torch.arange(self.t3conf.max_text_tokens + 2, device=self.text_pos_emb.emb.weight.device)
@@ -644,13 +684,18 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         # print("t3/compute_logits/logit with the highest probability (cond, uncond, post-cfg):", cond_logits.argmax(), uncond_logits.argmax(), logits.argmax())
 
         # HACK: Offset the logits so the resulting speech token is +SPEECH_TOKEN_OFFSET from the normal speech tokens.
-        #       We'll do this by adding SPEECH_TOKEN_OFFSET fake dimensions to the left of the logits.
-        #       This is a hack to help us unbatch batched inputs.
-        logits = torch.cat([
-            torch.zeros(logits.shape[0], SPEECH_TOKEN_OFFSET).to(logits.device).fill_(float('-inf')),
-            logits,
-        ], dim=1)
-        return logits
+        #       We'll do this by adding SPEECH_TOKEN_OFFSET fake dimensions to the left of the logits,
+        #       and padding the rest to reach the full vocab_size (32000).
+        target_vocab = self.vllm_config.model_config.hf_config.vocab_size
+        
+        logits_full = torch.full((logits.shape[0], target_vocab), float('-inf'), device=logits.device, dtype=logits.dtype)
+        
+        # Place our speech logits in the correct offset window
+        start_idx = SPEECH_TOKEN_OFFSET
+        end_idx = start_idx + logits.shape[1]
+        logits_full[:, start_idx:end_idx] = logits
+        
+        return logits_full
 
 
     def forward(
@@ -672,12 +717,8 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             # However, during profiling, vLLM passes random dummy input_ids.
             # We can detect real decoding because all speech tokens will be >= SPEECH_TOKEN_OFFSET.
             is_decoding = (input_ids >= SPEECH_TOKEN_OFFSET).all()
-            print(f"[T3VllmModel] forward: inputs_embeds is None. input_ids shape: {input_ids.shape}, min: {input_ids.min()}, max: {input_ids.max()}, is_decoding: {is_decoding}")
-            print(f"[T3VllmModel] positions: {positions.tolist()}")
-            print(f"[T3VllmModel] kwargs keys: {list(kwargs.keys())}")
             if is_decoding:
                 inputs_embeds = self.get_input_embeddings(input_ids, [])
-                print(f"[T3VllmModel] forward: generated inputs_embeds from speech_emb, shape: {inputs_embeds.shape}")
 
         if self.SAFE_MODE:
             # Delegate to self.tfmr (vLLM's LlamaModel) which handles:

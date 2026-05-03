@@ -87,7 +87,7 @@ model = None
 vllm_model = None
 BASE_T3_STATE = None
 # We no longer pre-load states to save RAM
-CURRENT_MODEL_TYPE = "nepali-final"
+CURRENT_MODEL_TYPE = "nepali-merged"
 # Set ENABLE_VLLM=1 to skip standard model and load vLLM at startup
 VLLM_MODE = os.environ.get("ENABLE_VLLM", "").strip() in ("1", "true", "True", "yes")
 
@@ -101,7 +101,7 @@ def set_seed(seed: int):
 
 # Supported Languages mapping
 SUPPORTED_LANGUAGES = {
-    "en": "English", "ne": "Nepali", "hi": "Hindi", "bn": "Bengali",
+    "ne": "Nepali", "en": "English", "hi": "Hindi", "bn": "Bengali",
     "gu": "Gujarati", "kn": "Kannada", "ml": "Malayalam", "mr": "Marathi",
     "pa": "Punjabi", "ta": "Tamil", "te": "Telugu"
 }
@@ -111,6 +111,22 @@ import copy
 
 # We only store the filenames, not the actual weights, to save RAM
 FINETUNE_FILES = {}
+
+# Pre-register available checkpoints globally
+def register_checkpoints():
+    global FINETUNE_FILES
+    print("--- Registering Checkpoints ---")
+    for name, filename in CHECKPOINTS.items():
+        try:
+            # Use standard HF cache to avoid double downloads
+            path = hf_hub_download(repo_id=REPO_ID, filename=filename)
+            FINETUNE_FILES[name] = path
+        except Exception as e:
+            print(f"Could not download {filename}: {e}")
+            continue
+    print(f"Registered {len(FINETUNE_FILES)} checkpoints.")
+
+register_checkpoints()
 
 def get_or_load_model(use_vllm=False):
     global model, vllm_model, BASE_T3_STATE, CURRENT_MODEL_TYPE, FINETUNE_FILES
@@ -134,9 +150,12 @@ def get_or_load_model(use_vllm=False):
             gc.collect()
             torch.cuda.empty_cache()
             print(f"   GPU memory freed: {torch.cuda.memory_allocated()/1e9:.2f}GB allocated")
-        print("Loading Chatterbox vLLM model...")
-        model_name = CHECKPOINTS.get(CURRENT_MODEL_TYPE, "t3_mtl_nepali_merged.safetensors")
-        vllm_model = ChatterboxTTS.from_nepali(model_filename=model_name)
+        
+        print(f"Loading Chatterbox vLLM model ({CURRENT_MODEL_TYPE})...")
+        filename = CHECKPOINTS.get(CURRENT_MODEL_TYPE, "t3_mtl_nepali_merged.safetensors")
+        # Use absolute path from registry to ensure we don't re-download or miss the file
+        model_path = FINETUNE_FILES.get(CURRENT_MODEL_TYPE, filename)
+        vllm_model = ChatterboxTTS.from_nepali(model_filename=model_path)
         return vllm_model
     else:
         if model is not None: return model
@@ -148,21 +167,10 @@ def get_or_load_model(use_vllm=False):
         print("Caching base T3 state...")
         BASE_T3_STATE = {k: v.cpu().clone() for k, v in model.t3.state_dict().items()}
         
-        # Identify available checkpoints but DON'T load them yet
-        for name, filename in CHECKPOINTS.items():
-            try:
-                # Use standard HF cache to avoid double downloads
-                path = hf_hub_download(repo_id=REPO_ID, filename=filename)
-                FINETUNE_FILES[name] = path
-                print(f"Registered checkpoint: {name}")
-            except Exception as e:
-                print(f"Could not download {filename}: {e}")
-                continue
-
-        # Load the default model (nepali-final) on demand
-        if "nepali-final" in FINETUNE_FILES:
-            print("Loading default Nepali model (nepali-final)...")
-            switch_model("nepali-final")
+        # Load the default model on demand if not base
+        if CURRENT_MODEL_TYPE != "base":
+            print(f"Loading default Nepali model ({CURRENT_MODEL_TYPE})...")
+            switch_model(CURRENT_MODEL_TYPE)
         
         return model
 
@@ -367,10 +375,10 @@ with gr.Blocks(title="Chatterbox Nepali TTS", css=CUSTOM_CSS) as demo:
         with gr.Column(scale=1):
             model_selector = gr.Radio(
                 choices=["base", "nepali-epoch-30", "nepali-epoch-40", "nepali-epoch-45", "nepali-final", "nepali-merged"],
-                value="nepali-final",
+                value="nepali-merged",
                 label="Checkpoint"
             )
-            model_status = gr.Markdown(f"**Status:** `Active: nepali-final`")
+            model_status = gr.Markdown(f"**Status:** `Active: nepali-merged`")
             
             exaggeration = gr.Slider(0.0, 3.0, value=0.0, step=0.1, label="Exaggeration")
             cfg_weight = gr.Slider(0.0, 3.0, value=0.8, step=0.1, label="CFG (Pace)")
