@@ -307,8 +307,6 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
             layer.post_attention_layernorm = BlockDiagonalRMSNorm(layer.post_attention_layernorm)
         self.tfmr.norm = BlockDiagonalRMSNorm(self.tfmr.norm)
 
-        self.cfg_scale = float(os.environ.get("CHATTERBOX_CFG_SCALE", "0.5"))
-        print("Applying CFG scale:", self.cfg_scale)
 
         # Initialize custom components
         is_multilingual = getattr(self.cfg.hf_config, 'is_multilingual', False)
@@ -632,9 +630,9 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
                         
                         # Extract the position IDs for the text portion by counting the number of 1s (minus 1) in the multimodal embedding
                         # that was injected via our hack above.
-                        text_pos = torch.sum(multimodal_embedding[0:len(text_ids)], dim=1) - 1
+                        text_pos = (torch.sum(multimodal_embedding[0:len(text_ids)], dim=1) - 1).long()
 
-                        text_emb = self.text_emb(text_ids) + self.precomputed_text_pos_emb[text_pos.tolist()]
+                        text_emb = self.text_emb(text_ids) + self.precomputed_text_pos_emb[text_pos]
 
                         start_of_speech_token = torch.tensor([self.t3conf.start_speech_token]).to(ids.device)
                         start_of_speech_emb = self.speech_emb(start_of_speech_token.unsqueeze(0))[0]  + self.precomputed_speech_pos_emb[0:1]
@@ -709,8 +707,9 @@ class T3VllmModel(nn.Module, VllmModelForTextGeneration, SupportsMultiModal):
         hidden_states = self.tfmr(
             input_ids=None,
             positions=positions, # Native sequence length, no batch duplication hack!
-            intermediate_tensors=None,
-            inputs_embeds=inputs_embeds # [N, 2048]
+            intermediate_tensors=intermediate_tensors,
+            inputs_embeds=inputs_embeds, # [N, 2048]
+            **kwargs
         )
         
         # Return the 2048-dim hidden states. They will be split in compute_logits.
