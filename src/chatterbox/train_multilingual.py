@@ -30,7 +30,7 @@ import wandb
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from huggingface_hub import HfApi
-from datasets import load_dataset
+from datasets import load_dataset, Audio
 
 from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 from chatterbox.models.t3.modules.cond_enc import T3Cond
@@ -44,8 +44,10 @@ class MultilingualStreamingDataset(IterableDataset):
         self.voice_encoder = voice_encoder
         self.device = device
         
-        # Load in streaming mode with shuffle buffer
-        self.ds = load_dataset(repo_id, split="train", streaming=True).shuffle(seed=42, buffer_size=1000)
+        # Load in streaming mode with shuffle buffer and explicit audio casting
+        self.ds = load_dataset(repo_id, split="train", streaming=True)
+        self.ds = self.ds.cast_column("audio", Audio(sampling_rate=S3_SR))
+        self.ds = self.ds.shuffle(seed=42, buffer_size=1000)
 
     def __iter__(self):
         for item in self.ds:
