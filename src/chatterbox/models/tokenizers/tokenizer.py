@@ -257,7 +257,7 @@ class MTLTokenizer:
     def __init__(self, vocab_file_path):
         self.tokenizer: Tokenizer = Tokenizer.from_file(vocab_file_path)
         # Ensure [ne] and possibly other tokens are present
-        new_tokens = ["[ne]"]
+        new_tokens = ["[ne]", "[mai]"]
         self.tokenizer.add_tokens([t for t in new_tokens if t not in self.tokenizer.get_vocab()])
         model_dir = Path(vocab_file_path).parent
         self.model_dir = model_dir
