@@ -150,9 +150,11 @@ def train(args):
     use_amp = args.fp16 and device.type == "cuda"
     scaler = GradScaler("cuda", enabled=use_amp) if use_amp else None
     
+    global_step = 0
     for epoch in range(args.epochs):
         pbar = tqdm(dataloader, desc=f"Epoch {epoch}") if rank == 0 else dataloader
         for i, batch in enumerate(pbar):
+            global_step += 1
             text_tokens = batch['text_tokens'].to(device)
             text_token_lens = batch['text_token_lens'].to(device)
             speech_tokens = batch['speech_tokens'].to(device)
@@ -188,12 +190,12 @@ def train(args):
             if rank == 0: 
                 pbar.set_postfix({"loss": loss.item() * args.accum_steps})
                 
-                # Save latest checkpoint every 1000 steps for safety on large datasets
-                if (i + 1) % 1000 == 0:
-                    temp_ckpt = "latest_checkpoint.pt"
-                    torch.save(t3_model.state_dict(), temp_ckpt)
+                # Save step-based checkpoint every 1000 steps for precise tracking
+                if global_step % 1000 == 0:
+                    step_ckpt = f"checkpoint_step_{global_step}.pt"
+                    torch.save(t3_model.state_dict(), step_ckpt)
                     if args.push_to_hub:
-                        try: HfApi().upload_file(path_or_fileobj=temp_ckpt, path_in_repo=temp_ckpt, repo_id=args.push_to_hub, token=os.environ.get("HF_TOKEN"))
+                        try: HfApi().upload_file(path_or_fileobj=step_ckpt, path_in_repo=step_ckpt, repo_id=args.push_to_hub, token=os.environ.get("HF_TOKEN"))
                         except: pass
         
         if rank == 0:
