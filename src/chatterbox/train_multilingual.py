@@ -28,6 +28,7 @@ import io
 import soundfile as sf
 import librosa
 import numpy as np
+import wandb
 from torch.nn.parallel import DistributedDataParallel as DDP
 from huggingface_hub import HfApi
 from datasets import load_dataset, Audio
