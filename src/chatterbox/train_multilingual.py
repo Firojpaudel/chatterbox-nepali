@@ -123,6 +123,18 @@ def train(args):
     voice_encoder = model_wrapper.ve.cpu()
     
     t3.to(device)
+    
+    # Optional: Resume from checkpoint
+    if args.resume_from:
+        if os.path.exists(args.resume_from):
+            print(f"🔄 Resuming training from {args.resume_from}...")
+            state_dict = torch.load(args.resume_from, map_location="cpu", weights_only=True)
+            # Handle possible DDP prefix if needed, though state_dict is usually clean
+            cleaned_state = {k.replace("module.", ""): v for k, v in state_dict.items()}
+            t3.load_state_dict(cleaned_state, strict=False)
+        else:
+            print(f"⚠️ Checkpoint {args.resume_from} not found. Starting from scratch.")
+
     if args.distributed:
         t3 = DDP(t3, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
     t3.train()
@@ -173,7 +185,16 @@ def train(args):
                     optimizer.step()
                     optimizer.zero_grad(set_to_none=True)
             
-            if rank == 0: pbar.set_postfix({"loss": loss.item() * args.accum_steps})
+            if rank == 0: 
+                pbar.set_postfix({"loss": loss.item() * args.accum_steps})
+                
+                # Save latest checkpoint every 1000 steps for safety on large datasets
+                if (i + 1) % 1000 == 0:
+                    temp_ckpt = "latest_checkpoint.pt"
+                    torch.save(t3_model.state_dict(), temp_ckpt)
+                    if args.push_to_hub:
+                        try: HfApi().upload_file(path_or_fileobj=temp_ckpt, path_in_repo=temp_ckpt, repo_id=args.push_to_hub, token=os.environ.get("HF_TOKEN"))
+                        except: pass
         
         if rank == 0:
             ckpt_path = f"t3_multilingual_epoch_{epoch}.pt"
@@ -185,7 +206,8 @@ def train(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo_id", type=str, required=True, help="HF Dataset Repo ID")
-    parser.add_argument("--push_to_hub", type=str)
+    parser.add_argument("--push_to_hub", type=str, help="HF Model Repo ID to push checkpoints")
+    parser.add_argument("--resume_from", type=str, help="Path to local checkpoint .pt file to resume from")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=8) # Lowered for T4
     parser.add_argument("--accum_steps", type=int, default=2)
