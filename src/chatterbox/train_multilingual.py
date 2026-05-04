@@ -178,7 +178,13 @@ def train(args):
             )
             
             with autocast("cuda", enabled=use_amp, dtype=torch.float16):
-                loss_text, loss_speech = t3_model.loss(t3_cond, text_tokens, text_token_lens, speech_tokens, speech_token_lens)
+                loss_text, loss_speech = t3_model.loss(
+                    t3_cond=t3_cond, 
+                    text_tokens=text_tokens, 
+                    text_token_lens=text_token_lens, 
+                    speech_tokens=speech_tokens, 
+                    speech_token_lens=speech_token_lens
+                )
             
             loss = (loss_text + loss_speech) / args.accum_steps
             if scaler:
