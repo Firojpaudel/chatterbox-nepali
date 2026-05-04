@@ -23,11 +23,11 @@ from torch.amp import autocast, GradScaler
 from torch.utils.data import IterableDataset, DataLoader
 from torch.optim import AdamW
 from tqdm import tqdm
+import torch.distributed as dist
+import io
+import soundfile as sf
 import librosa
 import numpy as np
-from safetensors.torch import save_file
-import wandb
-import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from huggingface_hub import HfApi
 from datasets import load_dataset, Audio
@@ -44,9 +44,9 @@ class MultilingualStreamingDataset(IterableDataset):
         self.voice_encoder = voice_encoder
         self.device = device
         
-        # Load in streaming mode with shuffle buffer and explicit audio casting
+        # Load in streaming mode with shuffle buffer and decode=False to bypass broken decoders
         self.ds = load_dataset(repo_id, split="train", streaming=True)
-        self.ds = self.ds.cast_column("audio", Audio(sampling_rate=S3_SR))
+        self.ds = self.ds.cast_column("audio", Audio(sampling_rate=S3_SR, decode=False))
         self.ds = self.ds.shuffle(seed=42, buffer_size=1000)
 
     def __iter__(self):
@@ -61,11 +61,16 @@ class MultilingualStreamingDataset(IterableDataset):
                 text_tokens = F.pad(text_tokens, (1, 1), value=0)
                 text_tokens[0] = 255 # Start token
 
-                # Process audio
-                wav = audio_data['array']
-                orig_sr = audio_data['sampling_rate']
-                if orig_sr != S3_SR:
-                    wav = librosa.resample(wav, orig_sr=orig_sr, target_sr=S3_SR)
+                # Process audio (Manual Decoding)
+                if isinstance(audio_data, dict) and 'bytes' in audio_data and audio_data['bytes'] is not None:
+                    with io.BytesIO(audio_data['bytes']) as f:
+                        wav, orig_sr = sf.read(f)
+                    if orig_sr != S3_SR:
+                        wav = librosa.resample(wav.astype(np.float32), orig_sr=orig_sr, target_sr=S3_SR)
+                else:
+                    wav = audio_data['array']
+                
+                wav = wav.astype(np.float32)
                 
                 with torch.no_grad():
                     speech_tokens, _ = self.s3_tokenizer.forward([wav])
