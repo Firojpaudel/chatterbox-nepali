@@ -38,7 +38,7 @@ from chatterbox.models.t3.modules.cond_enc import T3Cond
 from chatterbox.models.s3tokenizer import S3_SR
 
 class MultilingualStreamingDataset(IterableDataset):
-    def __init__(self, repo_id, tokenizer, s3_tokenizer, voice_encoder, device):
+    def __init__(self, repo_id, tokenizer, s3_tokenizer, voice_encoder, device, rank=0, world_size=1):
         self.repo_id = repo_id
         self.tokenizer = tokenizer
         self.s3_tokenizer = s3_tokenizer
@@ -47,8 +47,14 @@ class MultilingualStreamingDataset(IterableDataset):
         
         # Load in streaming mode with shuffle buffer and decode=False to bypass broken decoders
         self.ds = load_dataset(repo_id, split="train", streaming=True)
+        
+        # Split across nodes if distributed
+        if world_size > 1:
+            from datasets.distributed import split_dataset_by_node
+            self.ds = self.ds.split_dataset_by_node(rank, world_size)
+            
         self.ds = self.ds.cast_column("audio", Audio(sampling_rate=S3_SR, decode=False))
-        self.ds = self.ds.shuffle(seed=42, buffer_size=1000)
+        self.ds = self.ds.shuffle(seed=42 + rank, buffer_size=1000)
 
     def __iter__(self):
         for item in self.ds:
@@ -112,9 +118,11 @@ def train(args):
         torch.cuda.set_device(local_rank)
         device = torch.device("cuda", local_rank)
         rank = dist.get_rank()
+        world_size = dist.get_world_size()
     else:
         device = torch.device(args.device)
         rank = 0
+        world_size = 1
 
     if rank == 0 and not args.no_wandb:
         wandb.init(project="chatterbox-multilingual-streaming")
@@ -145,7 +153,15 @@ def train(args):
         t3 = DDP(t3, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
     t3.train()
     
-    dataset = MultilingualStreamingDataset(args.repo_id, tokenizer, s3_tokenizer, voice_encoder, device="cpu")
+    dataset = MultilingualStreamingDataset(
+        args.repo_id, 
+        tokenizer, 
+        s3_tokenizer, 
+        voice_encoder, 
+        device="cpu",
+        rank=rank,
+        world_size=world_size
+    )
     # For streaming, we don't use DistributedSampler, datasets handles it
     dataloader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=args.num_workers)
     
