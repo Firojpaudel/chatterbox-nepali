@@ -177,8 +177,9 @@ def train(args):
     if device.type == "cuda":
         (t3.module if args.distributed else t3).tfmr.gradient_checkpointing_enable()
     
-    use_amp = args.fp16 and device.type == "cuda"
-    scaler = GradScaler("cuda", enabled=use_amp) if use_amp else None
+    use_amp = (args.fp16 or args.bf16) and device.type == "cuda"
+    amp_dtype = torch.bfloat16 if args.bf16 else torch.float16
+    scaler = GradScaler("cuda", enabled=args.fp16) if args.fp16 else None
     
     global_step = 0
     for epoch in range(args.epochs):
@@ -215,7 +216,7 @@ def train(args):
                 emotion_adv=0.5 * torch.ones(text_tokens.size(0), 1, 1, device=device)
             )
             
-            with autocast("cuda", enabled=use_amp, dtype=torch.float16):
+            with autocast("cuda", enabled=use_amp, dtype=amp_dtype):
                 loss_text, loss_speech = t3_model.loss(
                     t3_cond=t3_cond, 
                     text_tokens=text_tokens, 
@@ -271,6 +272,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--save_every", type=int, default=1)
     parser.add_argument("--fp16", action="store_true")
+    parser.add_argument("--bf16", action="store_true", help="Use bfloat16 (recommended for RTX 30/40 series)")
     parser.add_argument("--no_wandb", action="store_true")
     parser.add_argument("--distributed", action="store_true")
     parser.add_argument("--num_workers", type=int, default=2) # Optimal for Kaggle
