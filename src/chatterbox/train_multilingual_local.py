@@ -252,9 +252,6 @@ def train(args):
                 if rank == 0 and global_step % 1000 == 0:
                     step_ckpt = f"checkpoint_step_{global_step}.pt"
                     torch.save(t3_model.state_dict(), step_ckpt)
-                    if args.push_to_hub:
-                        try: HfApi().upload_file(path_or_fileobj=step_ckpt, path_in_repo=step_ckpt, repo_id=args.push_to_hub, token=os.environ.get("HF_TOKEN"))
-                        except: pass
         
         if rank == 0 and epoch % args.save_every == 0:
             ckpt_path = f"t3_multilingual_epoch_{epoch}.pt"
