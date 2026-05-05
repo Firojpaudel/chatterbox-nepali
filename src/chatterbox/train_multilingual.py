@@ -14,6 +14,7 @@ except (ImportError, RuntimeError) as e:
 
 import argparse
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import json
 from pathlib import Path
 
@@ -88,9 +89,9 @@ class MultilingualStreamingDataset(IterableDataset):
                 
                 wav = wav.astype(np.float32)
                 
-                # Cap duration to avoid OOM (e.g. 30 seconds)
-                if len(wav) > 30 * S3_SR:
-                    wav = wav[:30 * S3_SR]
+                # Cap duration to avoid OOM (e.g. 20 seconds)
+                if len(wav) > 20 * S3_SR:
+                    wav = wav[:20 * S3_SR]
 
                 yield {
                     "text_tokens": text_tokens,
@@ -136,10 +137,12 @@ def train(args):
     tokenizer = model_wrapper.tokenizer
     t3.resize_text_embeddings(len(tokenizer.tokenizer.get_vocab()))
     
-    s3_tokenizer = model_wrapper.s3gen.tokenizer.to(device)
-    voice_encoder = model_wrapper.ve.to(device)
-    
     t3.to(device)
+    
+    # If using FP16, we can move auxiliary models to half precision to save VRAM
+    if args.fp16 and device.type == "cuda":
+        s3_tokenizer = s3_tokenizer.half()
+        voice_encoder = voice_encoder.half()
     
     # Optional: Resume from checkpoint
     if args.resume_from:
@@ -231,9 +234,11 @@ def train(args):
             
             if rank == 0: 
                 pbar.set_postfix({"loss": loss.item() * args.accum_steps})
-                
-                if (i+1) % 10 == 0:
-                    torch.cuda.empty_cache()
+            
+            # Periodic cache clearing on all ranks to prevent fragmentation
+            if (i+1) % 10 == 0:
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
                 
                 # Save step-based checkpoint every 1000 steps for precise tracking
                 if global_step % 1000 == 0:
@@ -256,7 +261,7 @@ if __name__ == "__main__":
     parser.add_argument("--push_to_hub", type=str, help="HF Model Repo ID to push checkpoints")
     parser.add_argument("--resume_from", type=str, help="Path to local checkpoint .pt file to resume from")
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=8) # Lowered for T4
+    parser.add_argument("--batch_size", type=int, default=4) # Lowered from 8 for T4 stability
     parser.add_argument("--accum_steps", type=int, default=2)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--save_every", type=int, default=1)
