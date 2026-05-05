@@ -240,6 +240,13 @@ def train(args):
             
             if rank == 0: 
                 pbar.set_postfix({"loss": loss.item() * args.accum_steps})
+                if not args.no_wandb:
+                    wandb.log({
+                        "loss": loss.item() * args.accum_steps,
+                        "global_step": global_step,
+                        "epoch": epoch,
+                        "learning_rate": optimizer.param_groups[0]['lr']
+                    })
             
             # Periodic cache clearing on all ranks to prevent fragmentation
             if (i+1) % 10 == 0:
