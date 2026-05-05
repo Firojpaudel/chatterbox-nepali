@@ -139,6 +139,9 @@ def train(args):
     
     t3.to(device)
     
+    s3_tokenizer = model_wrapper.s3gen.tokenizer.to(device)
+    voice_encoder = model_wrapper.ve.to(device)
+    
     # If using FP16, we can move auxiliary models to half precision to save VRAM
     if args.fp16 and device.type == "cuda":
         s3_tokenizer = s3_tokenizer.half()
