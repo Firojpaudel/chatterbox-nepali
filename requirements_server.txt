@@ -1,0 +1,7 @@
+datasets
+wandb
+huggingface-hub
+soundfile
+python-dotenv
+tqdm
+librosa
