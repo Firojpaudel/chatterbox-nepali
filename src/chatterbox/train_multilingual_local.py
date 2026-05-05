@@ -1,7 +1,7 @@
 import sys
 from unittest.mock import MagicMock
 
-# --- KAGGLE/ENVIRONMENT FIX ---
+# --- ENVIRONMENT FIX ---
 try:
     import torchvision
 except (ImportError, RuntimeError) as e:
@@ -27,7 +27,7 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 from torch.amp import autocast, GradScaler
-from torch.utils.data import IterableDataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from torch.optim import AdamW
 from tqdm import tqdm
 import torch.distributed as dist
@@ -44,69 +44,62 @@ from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 from chatterbox.models.t3.modules.cond_enc import T3Cond
 from chatterbox.models.s3tokenizer import S3_SR
 
-class MultilingualStreamingDataset(IterableDataset):
-    def __init__(self, repo_id, tokenizer, device, rank=0, world_size=1):
+class MultilingualDataset(Dataset):
+    def __init__(self, repo_id, tokenizer):
         self.repo_id = repo_id
         self.tokenizer = tokenizer
-        self.device = device
         
-        # Load in streaming mode
-        self.ds = load_dataset(repo_id, split="train", streaming=True)
-        
-        # Split across nodes if distributed
-        if world_size > 1:
-            from datasets.distributed import split_dataset_by_node
-            self.ds = split_dataset_by_node(self.ds, rank, world_size)
-            
+        print(f"📦 Loading dataset {repo_id} to local disk...")
+        self.ds = load_dataset(repo_id, split="train", streaming=False)
         self.ds = self.ds.cast_column("audio", Audio(sampling_rate=S3_SR, decode=False))
-        self.ds = self.ds.shuffle(seed=42 + rank, buffer_size=1000)
+        print(f"✅ Loaded {len(self.ds)} samples.")
 
-    def __iter__(self):
-        worker_info = torch.utils.data.get_worker_info()
-        if worker_info:
-            num_workers = worker_info.num_workers
-            worker_id = worker_info.id
-            ds_to_iter = self.ds.shard(num_shards=num_workers, index=worker_id)
-        else:
-            ds_to_iter = self.ds
+    def __len__(self):
+        return len(self.ds)
 
-        for item in ds_to_iter:
-            try:
-                audio_data = item['audio']
-                text = item.get('text') or ""
-                lang = item.get('language', 'ne')
+    def __getitem__(self, idx):
+        item = self.ds[idx]
+        try:
+            audio_data = item['audio']
+            text = item.get('text') or ""
+            lang = item.get('language', 'ne')
 
-                # Process text
-                text_tokens = self.tokenizer.text_to_tokens(text, language_id=lang, lowercase=False).squeeze(0)
-                text_tokens = F.pad(text_tokens, (1, 1), value=0)
-                text_tokens[0] = 255 # Start token
+            # Process text
+            text_tokens = self.tokenizer.text_to_tokens(text, language_id=lang, lowercase=False).squeeze(0)
+            text_tokens = F.pad(text_tokens, (1, 1), value=0)
+            text_tokens[0] = 255 # Start token
 
-                # Process audio (Manual Decoding)
-                if isinstance(audio_data, dict) and 'bytes' in audio_data and audio_data['bytes'] is not None:
-                    with io.BytesIO(audio_data['bytes']) as f:
-                        wav, orig_sr = sf.read(f)
-                    if orig_sr != S3_SR:
-                        import torchaudio.functional as F_audio
-                        wav_t = torch.from_numpy(wav.astype(np.float32)).unsqueeze(0)
-                        wav_t = F_audio.resample(wav_t, orig_sr, S3_SR)
-                        wav = wav_t.squeeze(0).numpy()
-                else:
-                    wav = audio_data['array']
-                
-                wav = wav.astype(np.float32)
-                
-                # Cap duration to avoid OOM (e.g. 20 seconds)
-                if len(wav) > 20 * S3_SR:
-                    wav = wav[:20 * S3_SR]
+            # Process audio (Manual Decoding)
+            if isinstance(audio_data, dict) and 'bytes' in audio_data and audio_data['bytes'] is not None:
+                with io.BytesIO(audio_data['bytes']) as f:
+                    wav, orig_sr = sf.read(f)
+                if orig_sr != S3_SR:
+                    import torchaudio.functional as F_audio
+                    wav_t = torch.from_numpy(wav.astype(np.float32)).unsqueeze(0)
+                    wav_t = F_audio.resample(wav_t, orig_sr, S3_SR)
+                    wav = wav_t.squeeze(0).numpy()
+            else:
+                wav = audio_data['array']
+            
+            wav = wav.astype(np.float32)
+            
+            # Cap duration to avoid OOM (20 seconds)
+            if len(wav) > 20 * S3_SR:
+                wav = wav[:20 * S3_SR]
 
-                yield {
-                    "text_tokens": text_tokens,
-                    "wav": wav,
-                    "lang": lang
-                }
-            except Exception as e:
-                print(f"⚠️ Skipping sample: {e}")
-                continue
+            return {
+                "text_tokens": text_tokens,
+                "wav": wav,
+                "lang": lang
+            }
+        except Exception as e:
+            print(f"⚠️ Skipping sample {idx}: {e}")
+            # Return a small silent sample instead of None to avoid batching issues
+            return {
+                "text_tokens": torch.zeros(5, dtype=torch.long),
+                "wav": np.zeros(S3_SR, dtype=np.float32),
+                "lang": "ne"
+            }
 
 def collate_fn(batch):
     text_tokens = [item['text_tokens'] for item in batch]
@@ -135,7 +128,7 @@ def train(args):
         world_size = 1
 
     if rank == 0 and not args.no_wandb:
-        wandb.init(project="chatterbox-multilingual-streaming")
+        wandb.init(project="chatterbox-multilingual-local")
         wandb.config.update(args)
 
     model_wrapper = ChatterboxMultilingualTTS.from_pretrained(device)
@@ -145,16 +138,15 @@ def train(args):
     
     t3.to(device)
     
-    # Keep auxiliary models in FP32 for signal processing stability
+    # Auxiliary models for feature extraction
     s3_tokenizer = model_wrapper.s3gen.tokenizer.to(device)
     voice_encoder = model_wrapper.ve.to(device)
-    
+
     # Optional: Resume from checkpoint
     if args.resume_from:
         if os.path.exists(args.resume_from):
             print(f"🔄 Resuming training from {args.resume_from}...")
             state_dict = torch.load(args.resume_from, map_location="cpu", weights_only=True)
-            # Handle possible DDP prefix if needed, though state_dict is usually clean
             cleaned_state = {k.replace("module.", ""): v for k, v in state_dict.items()}
             t3.load_state_dict(cleaned_state, strict=False)
         else:
@@ -164,14 +156,18 @@ def train(args):
         t3 = DDP(t3, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
     t3.train()
     
-    dataset = MultilingualStreamingDataset(
-        args.repo_id, 
-        tokenizer, 
-        device="cpu", # Data fetching stays on CPU
-        rank=rank,
-        world_size=world_size
+    dataset = MultilingualDataset(args.repo_id, tokenizer)
+    
+    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True) if args.distributed else None
+    dataloader = DataLoader(
+        dataset, 
+        batch_size=args.batch_size, 
+        collate_fn=collate_fn, 
+        num_workers=args.num_workers, 
+        pin_memory=True,
+        sampler=sampler,
+        shuffle=(sampler is None)
     )
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=args.num_workers, pin_memory=True)
     
     optimizer = AdamW(t3.parameters(), lr=args.lr)
     if device.type == "cuda":
@@ -182,7 +178,9 @@ def train(args):
     
     global_step = 0
     for epoch in range(args.epochs):
+        if sampler: sampler.set_epoch(epoch)
         pbar = tqdm(dataloader, desc=f"Epoch {epoch}") if rank == 0 else dataloader
+        
         for i, batch in enumerate(pbar):
             global_step += 1
             text_tokens = batch['text_tokens'].to(device)
@@ -194,11 +192,9 @@ def train(args):
                 speech_tokens, _ = s3_tokenizer.forward(wavs)
                 speech_tokens = speech_tokens.to(device)
                 speech_token_lens = torch.tensor([len(s) for s in speech_tokens], device=device)
-                # Pad speech tokens for loss calculation
                 speech_tokens = torch.nn.utils.rnn.pad_sequence(speech_tokens, batch_first=True, padding_value=6562)
                 
                 ve_embeds = voice_encoder.embeds_from_wavs(wavs, sample_rate=S3_SR)
-                # ve_embeds is likely a list of arrays if lengths vary, or a single array
                 if isinstance(ve_embeds, list):
                     speaker_emb = torch.stack([torch.from_numpy(v).to(device).mean(dim=0) for v in ve_embeds])
                 else:
@@ -240,13 +236,12 @@ def train(args):
             if rank == 0: 
                 pbar.set_postfix({"loss": loss.item() * args.accum_steps})
             
-            # Periodic cache clearing on all ranks to prevent fragmentation
+            # Periodic cache clearing to prevent fragmentation
             if (i+1) % 10 == 0:
                 torch.cuda.synchronize()
                 torch.cuda.empty_cache()
                 
-                # Save step-based checkpoint every 1000 steps for precise tracking
-                if global_step % 1000 == 0:
+                if rank == 0 and global_step % 1000 == 0:
                     step_ckpt = f"checkpoint_step_{global_step}.pt"
                     torch.save(t3_model.state_dict(), step_ckpt)
                     if args.push_to_hub:
@@ -266,14 +261,14 @@ if __name__ == "__main__":
     parser.add_argument("--push_to_hub", type=str, help="HF Model Repo ID to push checkpoints")
     parser.add_argument("--resume_from", type=str, help="Path to local checkpoint .pt file to resume from")
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=4) # Lowered from 8 for T4 stability
-    parser.add_argument("--accum_steps", type=int, default=2)
+    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--accum_steps", type=int, default=4)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--save_every", type=int, default=1)
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--no_wandb", action="store_true")
     parser.add_argument("--distributed", action="store_true")
-    parser.add_argument("--num_workers", type=int, default=2) # Optimal for Kaggle
+    parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
     train(args)
