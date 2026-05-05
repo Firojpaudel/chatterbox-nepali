@@ -51,7 +51,7 @@ class MultilingualStreamingDataset(IterableDataset):
         # Split across nodes if distributed
         if world_size > 1:
             from datasets.distributed import split_dataset_by_node
-            self.ds = self.ds.split_dataset_by_node(rank, world_size)
+            self.ds = split_dataset_by_node(self.ds, rank, world_size)
             
         self.ds = self.ds.cast_column("audio", Audio(sampling_rate=S3_SR, decode=False))
         self.ds = self.ds.shuffle(seed=42 + rank, buffer_size=1000)
