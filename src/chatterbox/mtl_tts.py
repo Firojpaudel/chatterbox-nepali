@@ -46,6 +46,7 @@ SUPPORTED_LANGUAGES = {
   "tr": "Turkish",
   "zh": "Chinese",
   "ne": "Nepali",
+  "mai": "Maithili",
 }
 
 
@@ -163,7 +164,7 @@ class ChatterboxMultilingualTTS:
         return SUPPORTED_LANGUAGES.copy()
 
     @classmethod
-    def from_local(cls, ckpt_dir, device) -> 'ChatterboxMultilingualTTS':
+    def from_local(cls, ckpt_dir, device, vocab_file_path=None) -> 'ChatterboxMultilingualTTS':
         ckpt_dir = Path(ckpt_dir)
 
         # Always load to CPU first for non-CUDA devices to handle CUDA-saved models
@@ -206,7 +207,7 @@ class ChatterboxMultilingualTTS:
         s3gen.to(device).eval()
 
         tokenizer = MTLTokenizer(
-            str(ckpt_dir / "grapheme_mtl_merged_expanded_v1.json")
+            vocab_file_path or str(ckpt_dir / "grapheme_mtl_merged_expanded_v1.json")
         )
 
         conds = None
@@ -216,7 +217,7 @@ class ChatterboxMultilingualTTS:
         return cls(t3, s3gen, ve, tokenizer, device, conds=conds)
 
     @classmethod
-    def from_pretrained(cls, device: torch.device) -> 'ChatterboxMultilingualTTS':
+    def from_pretrained(cls, device: torch.device, vocab_file_path: str = None) -> 'ChatterboxMultilingualTTS':
         # Check if MPS is available on macOS
         if device == "mps" and not torch.backends.mps.is_available():
             if not torch.backends.mps.is_built():
@@ -234,7 +235,7 @@ class ChatterboxMultilingualTTS:
                 token=os.getenv("HF_TOKEN"),
             )
         )
-        return cls.from_local(ckpt_dir, device)
+        return cls.from_local(ckpt_dir, device, vocab_file_path=vocab_file_path)
     
     def prepare_conditionals(self, wav_fpath, exaggeration=0.5):
         ## Load reference wav

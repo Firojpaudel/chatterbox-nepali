@@ -180,7 +180,7 @@ def collate_fn(batch):
     speech_token_lens = torch.tensor([len(s) for s in speech_tokens])
     
     # Pad sequences
-    text_tokens_padded = torch.nn.utils.rnn.pad_sequence(text_tokens, batch_first=True, padding_value=0)
+    text_tokens_padded = torch.nn.utils.rnn.pad_sequence(text_tokens, batch_first=True, padding_value=705)  # [PAD] token, not [STOP]
     speech_tokens_padded = torch.nn.utils.rnn.pad_sequence(speech_tokens, batch_first=True, padding_value=6562) # stop_speech_token
     
     speaker_embs = torch.cat(speaker_embs, dim=0)

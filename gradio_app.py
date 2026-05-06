@@ -28,13 +28,12 @@ print(f"DEBUG: Using sanitizer from: {sanitizer.__file__}")
 # =========================================================================
 
 # Model path config
-REPO_ID = "Firoj112/chatterbox-nepali-runs"
 CHECKPOINTS = {
-    "nepali-epoch-30": "t3_nepali_epoch_30.pt",
-    "nepali-epoch-40": "t3_nepali_epoch_40.pt",
-    "nepali-epoch-45": "t3_nepali_epoch_45.pt",
-    "nepali-final": "t3_mtl_nepali_final.safetensors",
-    "nepali-merged": "t3_mtl_nepali_merged.safetensors",  # 0.7 FT / 0.3 Base blend
+    "nepali-final": ("Firoj112/chatterbox-nepali-runs", "t3_mtl_nepali_final.safetensors"),
+    "nepali-merged": ("Firoj112/chatterbox-nepali-runs", "t3_mtl_nepali_merged.safetensors"),  # 0.7 FT / 0.3 Base blend
+    "epoch-0": ("Firoj112/chatterbox-multilingual-t3-v1", "t3_multilingual_epoch_0.pt"),
+    "epoch-4": ("Firoj112/chatterbox-multilingual-t3-v1", "t3_multilingual_epoch_4.safetensors"),
+    "epoch-5": ("Firoj112/chatterbox-multilingual-t3-v1", "t3_multilingual_epoch_5.safetensors"),
 }
 
 EVENT_TAGS = [
@@ -85,7 +84,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 model = None
 BASE_T3_STATE = None
 # We no longer pre-load states to save RAM
-CURRENT_MODEL_TYPE = "nepali-final"
+CURRENT_MODEL_TYPE = "epoch-5"
 
 def set_seed(seed: int):
     torch.manual_seed(seed)
@@ -97,7 +96,7 @@ def set_seed(seed: int):
 
 # Supported Languages mapping
 SUPPORTED_LANGUAGES = {
-    "en": "English", "ne": "Nepali", "hi": "Hindi", "bn": "Bengali",
+    "en": "English", "ne": "Nepali", "mai": "Maithili", "hi": "Hindi", "bn": "Bengali",
     "gu": "Gujarati", "kn": "Kannada", "ml": "Malayalam", "mr": "Marathi",
     "pa": "Punjabi", "ta": "Tamil", "te": "Telugu"
 }
@@ -121,10 +120,10 @@ def get_or_load_model():
     BASE_T3_STATE = {k: v.cpu().clone() for k, v in model.t3.state_dict().items()}
     
     # Identify available checkpoints but DON'T load them yet
-    for name, filename in CHECKPOINTS.items():
+    for name, (repo_id, filename) in CHECKPOINTS.items():
         if not os.path.exists(filename):
             try:
-                hf_hub_download(repo_id=REPO_ID, filename=filename, local_dir=".")
+                hf_hub_download(repo_id=repo_id, filename=filename, local_dir=".")
             except Exception as e:
                 print(f"Could not download {filename}: {e}")
                 continue
@@ -133,10 +132,10 @@ def get_or_load_model():
             FINETUNE_FILES[name] = filename
             print(f"Registered checkpoint: {name} ({filename})")
 
-    # Load the default model (nepali-final) on demand
-    if "nepali-final" in FINETUNE_FILES:
-        print("Loading default Nepali model (nepali-final)...")
-        switch_model("nepali-final")
+    # Load the default model (epoch-5) on demand
+    if "epoch-5" in FINETUNE_FILES:
+        print("Loading default Multilingual model (epoch-5)...")
+        switch_model("epoch-5")
     
     return model
 
@@ -308,11 +307,11 @@ with gr.Blocks(title="Chatterbox Nepali TTS", css=CUSTOM_CSS) as demo:
 
         with gr.Column(scale=1):
             model_selector = gr.Radio(
-                choices=["base", "nepali-epoch-30", "nepali-epoch-40", "nepali-epoch-45", "nepali-final", "nepali-merged"],
-                value="nepali-final",
+                choices=["base", "nepali-final", "nepali-merged", "epoch-0", "epoch-4", "epoch-5"],
+                value="epoch-5",
                 label="Checkpoint"
             )
-            model_status = gr.Markdown(f"**Status:** `Active: nepali-final`")
+            model_status = gr.Markdown(f"**Status:** `Active: epoch-5`")
             
             exaggeration = gr.Slider(0.0, 3.0, value=0.0, step=0.1, label="Exaggeration")
             cfg_weight = gr.Slider(0.0, 3.0, value=0.8, step=0.1, label="CFG (Pace)")

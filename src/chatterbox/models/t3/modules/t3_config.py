@@ -28,7 +28,7 @@ class T3Config:
     
     @property
     def is_multilingual(self):
-        return self.text_tokens_dict_size == 2455
+        return self.text_tokens_dict_size >= 2455
 
     @classmethod
     def english_only(cls):

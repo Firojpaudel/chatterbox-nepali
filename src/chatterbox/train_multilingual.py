@@ -76,10 +76,11 @@ class MultilingualStreamingDataset(IterableDataset):
                 text = item.get('text') or ""
                 lang = item.get('language', 'ne')
 
-                # Process text
-                text_tokens = self.tokenizer.text_to_tokens(text, language_id=lang, lowercase=False).squeeze(0)
-                text_tokens = F.pad(text_tokens, (1, 1), value=0)
-                text_tokens[0] = 255 # Start token
+                # Process text — must match inference pattern in mtl_tts.py:generate()
+                # text_to_tokens prepends [LANG], then we wrap with [START]/[STOP]
+                text_tokens = self.tokenizer.text_to_tokens(text, language_id=lang).squeeze(0)
+                text_tokens = F.pad(text_tokens, (1, 0), value=255)  # prepend [START]
+                text_tokens = F.pad(text_tokens, (0, 1), value=0)    # append [STOP]
 
                 # Process audio (Manual Decoding)
                 if isinstance(audio_data, dict) and 'bytes' in audio_data and audio_data['bytes'] is not None:
@@ -113,7 +114,7 @@ def collate_fn(batch):
     wavs = [item['wav'] for item in batch]
     
     text_token_lens = torch.tensor([len(t) for t in text_tokens])
-    text_tokens_padded = torch.nn.utils.rnn.pad_sequence(text_tokens, batch_first=True, padding_value=0)
+    text_tokens_padded = torch.nn.utils.rnn.pad_sequence(text_tokens, batch_first=True, padding_value=705)  # [PAD] token, not [STOP]
     
     return {
         "text_tokens": text_tokens_padded,
