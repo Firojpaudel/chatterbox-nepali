@@ -92,13 +92,13 @@ def sanitize_numbers(num_str, lang="ne"):
         parts = num_str.split(".", 1)
         whole = parts[0] if parts[0] else "0"
         frac = parts[1]
-        whole_text = number_to_nepali(int(whole)) if lang == "ne" else number_to_english(int(whole))
-        point_word = "दशमलव" if lang == "ne" else "point"
-        frac_words = [NEPALI_NUMS[int(d)] if lang == "ne" else ENGLISH_ONES[int(d)] for d in frac]
+        whole_text = number_to_english(int(whole)) if lang == "en" else number_to_nepali(int(whole))
+        point_word = "point" if lang == "en" else "दशमलव"
+        frac_words = [ENGLISH_ONES[int(d)] if lang == "en" else NEPALI_NUMS[int(d)] for d in frac]
         return f"{whole_text} {point_word} {' '.join(frac_words)}"
     try:
         val = int(num_str)
-        return number_to_nepali(val) if lang == "ne" else number_to_english(val)
+        return number_to_english(val) if lang == "en" else number_to_nepali(val)
     except:
         return num_str
 
@@ -122,11 +122,11 @@ def sanitize_text(text, lang="ne"):
     }
     for unit, (ne_word, en_word) in units.items():
         pattern = rf'([0-9०-९,.]+)\s?{unit}\b'
-        word = ne_word if lang == "ne" else en_word
+        word = en_word if lang == "en" else ne_word
         text = re.sub(pattern, lambda m: f"{sanitize_numbers(m.group(1), lang)} {word}", text)
 
     # 4. Symbols
-    if lang == "ne":
+    if lang != "en":
         text = re.sub(r'([0-9०-९,.]+)\s?%', lambda m: f"{sanitize_numbers(m.group(1), lang)} प्रतिशत", text)
         symbol_map = {'&': 'र', '@': 'एट', '#': 'ह्यास', '$': 'डलर', '/': 'स्ल्याश'}
     else:
@@ -147,8 +147,8 @@ def sanitize_text(text, lang="ne"):
         return f"{h_word} {m_word}"
     text = re.sub(time_regex, replace_time, text)
 
-    # 6. Phone Numbers (Pairs - only for Nepali)
-    if lang == "ne":
+    # 6. Phone Numbers (Pairs - for Indic)
+    if lang != "en":
         phone_regex = r'\b((?:98|97|96)[0-9०-९\s-]{8,11}|0[1-9][0-9०-९\s-]{6,10})\b'
         def replace_phone(match):
             raw = match.group(0)
@@ -172,7 +172,7 @@ def sanitize_text(text, lang="ne"):
     currency_regex = r'(Rs\.?|रू\.?|रु\.?)?\s?([0-9०-९,]+(?:\.[0-9०-९,]+)?)\s?(रुपैयाँ|rupees)?'
     def replace_currency(match):
         if not match.group(1) and not match.group(3): return match.group(0)
-        word = "रुपैयाँ" if lang == "ne" else "rupees"
+        word = "rupees" if lang == "en" else "रुपैयाँ"
         return f" {sanitize_numbers(match.group(2), lang)} {word} "
     text = re.sub(currency_regex, replace_currency, text)
 
@@ -180,8 +180,8 @@ def sanitize_text(text, lang="ne"):
     text = re.sub(r'\b[0-9०-९,]+(?:\.[0-9०-९,]+)?\b', lambda m: sanitize_numbers(m.group(0), lang), text)
 
     # 9. Acronyms
-    if lang == "ne":
-        # For Nepali, expand capital letters to Devanagari phonetics
+    if lang != "en":
+        # For Indic, expand capital letters to Devanagari phonetics
         text = re.sub(r'\b([a-z])\b', lambda m: m.group(1).upper(), text)
         def replace_acronym_ne(match):
             acro, suff = match.group(1), match.group(2) or ""
@@ -194,12 +194,13 @@ def sanitize_text(text, lang="ne"):
         pass
 
     # 10. FINAL SAFETY CLEANUP
-    if lang == "ne":
-        # Aggressive cleanup for Nepali to prevent halluncinations from punctuation
-        text = re.sub(r'[^a-zA-Z0-9\u0900-\u097F\s।\.?!]', ' ', text)
-    else:
+    if lang == "en":
         # Lighter cleanup for English - preserve apostrophes, hyphens, and commas
         text = re.sub(r'[^a-zA-Z0-9\s\.\,\!\?\-\'\"]', ' ', text)
+    else:
+        # Aggressive cleanup for Indic languages to prevent hallucinations from punctuation
+        # Preserve all Indic unicode blocks (\u0900-\u0D7F) + basic English alphabet
+        text = re.sub(r'[^a-zA-Z0-9\u0900-\u0D7F\s।\.?!\,\-\'\"]', ' ', text)
         
     text = re.sub(r'\s+', ' ', text).strip()
     return text

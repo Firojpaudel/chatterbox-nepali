@@ -73,57 +73,28 @@ def compare():
             
             model.t3.load_state_dict(cleaned_state, strict=False)
         
-        # Always use the model's config for start/stop tokens (255/0)
-        current_sot = model.t3.hp.start_text_token
-        current_eot = model.t3.hp.stop_text_token
-        print(f"  🎯 Token IDs: Start={current_sot}, Stop={current_eot}, is_multilingual={model.t3.hp.is_multilingual}")
-        
         model.t3.eval()
-
-        def generate_with_pattern(text, lang, sot, eot):
-            # 1. Get tokens (puts [lang] at index 0)
-            text_tokens = model.tokenizer.text_to_tokens(text, language_id=lang.lower()).to(device)
-            
-            # Use the same pattern for both base and finetuned: [START] [LANG] [TEXT...] [STOP]
-            # text_to_tokens already prepends [LANG], so we just wrap with START/STOP
-            text_tokens = F.pad(text_tokens, (1, 0), value=sot)
-            text_tokens = F.pad(text_tokens, (0, 1), value=eot)
-
-            # CFG doubling
-            text_tokens = torch.cat([text_tokens, text_tokens], dim=0)
-
-            with torch.inference_mode():
-                speech_tokens = model.t3.inference(
-                    t3_cond=model.conds.t3,
-                    text_tokens=text_tokens,
-                    repetition_penalty=1.3,
-                    cfg_weight=2.5,
-                    temperature=0.7,
-                    min_p=0.1,
-                    max_new_tokens=400
-                )
-                speech_tokens = drop_invalid_tokens(speech_tokens[0])
-                if speech_tokens.numel() == 0: return torch.zeros((1, 1, 1024))
-                
-                wav, _ = model.s3gen.inference(
-                    speech_tokens=speech_tokens.to(device),
-                    ref_dict=model.conds.gen,
-                )
-                return torch.from_numpy(wav.squeeze(0).detach().cpu().numpy()).unsqueeze(0)
 
         for test in TEST_CASES:
             print(f"  🔊 Generating: {test['name']} ({test['lang']})...")
             try:
-                # Use original reference audio directly
-                if os.path.exists(ref_audio):
-                    model.prepare_conditionals(ref_audio)
-                
-                wav = generate_with_pattern(
-                    test['text'], 
-                    lang=test['lang'],
-                    sot=current_sot,
-                    eot=current_eot,
+                # Use model.generate to match Gradio logic exactly
+                wav = model.generate(
+                    text=test['text'],
+                    language_id=test['lang'],
+                    audio_prompt_path=ref_audio if os.path.exists(ref_audio) else None,
+                    exaggeration=0.5,
+                    cfg_weight=2.5,
+                    repetition_penalty=1.3,
+                    temperature=0.7,
+                    min_p=0.1,
+                    max_new_tokens=400,
+                    enable_protection=True
                 )
+                
+                if wav is None:
+                    print(f"  ⚠️ Warning: Generated zero tokens.")
+                    continue
                 
                 # Ultimate Tail Suppression
                 audio_data = wav.squeeze().cpu().numpy()
