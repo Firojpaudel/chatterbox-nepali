@@ -50,7 +50,7 @@ def compare():
     model.s3gen.to(device)
     model.ve.to(device)
 
-    ref_audio = "samples/ReelAudio-84831.mp3"
+    ref_audio = "samples/Radio_Nepal_ruby_shrestha.mp3"
     
     for ckpt_name, ckpt_path in CHECKPOINTS.items():
         print(f"\n--- Testing {ckpt_name} ---")
