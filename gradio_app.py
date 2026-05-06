@@ -162,6 +162,13 @@ def switch_model(model_type):
             
             clean_state = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in state.items()}
             
+            if "text_emb.weight" in clean_state:
+                state_vocab_size = clean_state["text_emb.weight"].shape[0]
+                model_vocab_size = model.t3.hp.text_tokens_dict_size
+                if state_vocab_size != model_vocab_size:
+                    print(f"Resizing T3 vocabulary from {model_vocab_size} to {state_vocab_size}")
+                    model.t3.resize_text_embeddings(state_vocab_size)
+            
             model.t3.load_state_dict(clean_state, strict=False)
             model.t3.to(DEVICE).eval()
             model.t3.compiled = False
@@ -179,6 +186,13 @@ def switch_model(model_type):
             print("--- Switching to Base Multilingual model ---")
             if BASE_T3_STATE is None:
                 return "Base state missing"
+            
+            if "text_emb.weight" in BASE_T3_STATE:
+                state_vocab_size = BASE_T3_STATE["text_emb.weight"].shape[0]
+                model_vocab_size = model.t3.hp.text_tokens_dict_size
+                if state_vocab_size != model_vocab_size:
+                    print(f"Resizing T3 vocabulary back from {model_vocab_size} to {state_vocab_size} for base model")
+                    model.t3.resize_text_embeddings(state_vocab_size)
             
             model.t3.load_state_dict(BASE_T3_STATE, strict=True)
             model.t3.to(DEVICE).eval()
