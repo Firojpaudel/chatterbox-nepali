@@ -29,7 +29,7 @@ import torch.nn.functional as F
 from torch.amp import autocast, GradScaler
 from torch.utils.data import IterableDataset, DataLoader
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR, LambdaLR
 from tqdm import tqdm
 import torch.distributed as dist
 import io
@@ -45,83 +45,128 @@ from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 from chatterbox.models.t3.modules.cond_enc import T3Cond
 from chatterbox.models.s3tokenizer import S3_SR
 
-class MultilingualStreamingDataset(IterableDataset):
-    def __init__(self, repo_id, tokenizer, device, rank=0, world_size=1):
-        self.repo_id = repo_id
+
+class MultilingualLocalDataset(torch.utils.data.Dataset):
+    def __init__(self, data_path, tokenizer, device):
         self.tokenizer = tokenizer
         self.device = device
         
-        # Load in streaming mode
-        self.ds = load_dataset(repo_id, split="train", streaming=True)
+        print(f"Loading local dataset from {data_path}...")
+        # Load all parquet files in the data directory
+        data_files = [str(p) for p in Path(data_path).glob("*.parquet")]
+        self.ds = load_dataset("parquet", data_files=data_files, split="train")
         
-        # Split across nodes if distributed
-        if world_size > 1:
-            from datasets.distributed import split_dataset_by_node
-            self.ds = split_dataset_by_node(self.ds, rank, world_size)
-            
+        # Global shuffle — this is only possible with local data!
+        # This fixes the sequential language problem.
+        print("Performing global shuffle...")
+        self.ds = self.ds.shuffle(seed=42)
+        
         self.ds = self.ds.cast_column("audio", Audio(sampling_rate=S3_SR, decode=False))
-        self.ds = self.ds.shuffle(seed=42 + rank, buffer_size=1000)
+        print(f"Dataset loaded: {len(self.ds)} samples")
 
-    def __iter__(self):
-        worker_info = torch.utils.data.get_worker_info()
-        if worker_info:
-            num_workers = worker_info.num_workers
-            worker_id = worker_info.id
-            ds_to_iter = self.ds.shard(num_shards=num_workers, index=worker_id)
-        else:
-            ds_to_iter = self.ds
+    def __len__(self):
+        return len(self.ds)
 
-        for item in ds_to_iter:
-            try:
-                audio_data = item['audio']
-                text = item.get('text') or ""
-                lang = item.get('language', 'ne')
+    def __getitem__(self, idx):
+        try:
+            item = self.ds[idx]
+            audio_data = item['audio']
+            text = item.get('text') or ""
+            lang = item.get('language', 'ne')
 
-                # Process text — must match inference pattern in mtl_tts.py:generate()
-                # text_to_tokens prepends [LANG], then we wrap with [START]/[STOP]
-                text_tokens = self.tokenizer.text_to_tokens(text, language_id=lang).squeeze(0)
-                text_tokens = F.pad(text_tokens, (1, 0), value=255)  # prepend [START]
-                text_tokens = F.pad(text_tokens, (0, 1), value=0)    # append [STOP]
+            # Process text — must match inference pattern
+            text_tokens = self.tokenizer.text_to_tokens(text, language_id=lang).squeeze(0)
+            text_tokens = F.pad(text_tokens, (1, 0), value=255)  # [START]
+            text_tokens = F.pad(text_tokens, (0, 1), value=0)    # [STOP]
 
-                # Process audio (Manual Decoding)
-                if isinstance(audio_data, dict) and 'bytes' in audio_data and audio_data['bytes'] is not None:
-                    with io.BytesIO(audio_data['bytes']) as f:
-                        wav, orig_sr = sf.read(f)
-                    if orig_sr != S3_SR:
-                        import torchaudio.functional as F_audio
-                        wav_t = torch.from_numpy(wav.astype(np.float32)).unsqueeze(0)
-                        wav_t = F_audio.resample(wav_t, orig_sr, S3_SR)
-                        wav = wav_t.squeeze(0).numpy()
-                else:
-                    wav = audio_data['array']
-                
-                wav = wav.astype(np.float32)
-                
-                # Cap duration to avoid OOM (e.g. 20 seconds)
-                if len(wav) > 20 * S3_SR:
-                    wav = wav[:20 * S3_SR]
+            # Process audio
+            if isinstance(audio_data, dict) and 'bytes' in audio_data and audio_data['bytes'] is not None:
+                with io.BytesIO(audio_data['bytes']) as f:
+                    wav, orig_sr = sf.read(f)
+                if orig_sr != S3_SR:
+                    import torchaudio.functional as F_audio
+                    wav_t = torch.from_numpy(wav.astype(np.float32)).unsqueeze(0)
+                    wav_t = F_audio.resample(wav_t, orig_sr, S3_SR)
+                    wav = wav_t.squeeze(0).numpy()
+            else:
+                wav = audio_data['array']
+            
+            wav = wav.astype(np.float32)
+            
+            if len(wav) > 20 * S3_SR:
+                wav = wav[:20 * S3_SR]
 
-                yield {
-                    "text_tokens": text_tokens,
-                    "wav": wav,
-                    "lang": lang
-                }
-            except Exception as e:
-                print(f"⚠️ Skipping sample: {e}")
-                continue
+            return {
+                "text_tokens": text_tokens,
+                "wav": wav,
+                "lang": lang
+            }
+        except Exception as e:
+            print(f"⚠️ Skipping sample {idx}: {e}")
+            # Return a random sample instead of None to keep batch size consistent
+            return self.__getitem__(np.random.randint(0, len(self.ds)))
 
 def collate_fn(batch):
     text_tokens = [item['text_tokens'] for item in batch]
     wavs = [item['wav'] for item in batch]
     
     text_token_lens = torch.tensor([len(t) for t in text_tokens])
-    text_tokens_padded = torch.nn.utils.rnn.pad_sequence(text_tokens, batch_first=True, padding_value=705)  # [PAD] token, not [STOP]
+    text_tokens_padded = torch.nn.utils.rnn.pad_sequence(text_tokens, batch_first=True, padding_value=705)
     
     return {
         "text_tokens": text_tokens_padded,
         "text_token_lens": text_token_lens,
         "wavs": wavs
     }
+
+
+def freeze_bottom_layers(t3_model, num_freeze):
+    """
+    Freeze the bottom `num_freeze` transformer layers.
+    
+    Bottom layers learn universal acoustic patterns (clear speech, natural pauses,
+    smooth transitions). Freezing them prevents catastrophic forgetting — the model
+    keeps its ability to produce clean audio while the top layers learn new languages.
+    
+    Trainable after freezing:
+      - Top (total - num_freeze) transformer layers
+      - text_emb (needed for new language tokens)
+      - speech_emb, speech_head (acoustic output)
+      - text_head, text_pos_emb, speech_pos_emb
+      - cond_enc (conditioning encoder)
+      - tfmr.norm (final layer norm)
+    
+    Frozen:
+      - Bottom num_freeze transformer layers (preserves acoustic foundation)
+    """
+    total_layers = len(t3_model.tfmr.layers)
+    if num_freeze > total_layers:
+        raise ValueError(f"Cannot freeze {num_freeze} layers, model only has {total_layers}")
+    
+    frozen_params = 0
+    trainable_params = 0
+    
+    # Freeze the bottom N layers
+    for i in range(num_freeze):
+        for param in t3_model.tfmr.layers[i].parameters():
+            param.requires_grad = False
+            frozen_params += param.numel()
+    
+    # Count trainable params
+    for param in t3_model.parameters():
+        if param.requires_grad:
+            trainable_params += param.numel()
+    
+    total_params = frozen_params + trainable_params
+    print(f"\n🧊 Layer Freezing Summary:")
+    print(f"   Total transformer layers: {total_layers}")
+    print(f"   Frozen (bottom):          {num_freeze} layers")
+    print(f"   Trainable (top):          {total_layers - num_freeze} layers")
+    print(f"   Frozen parameters:        {frozen_params:,} ({frozen_params/total_params*100:.1f}%)")
+    print(f"   Trainable parameters:     {trainable_params:,} ({trainable_params/total_params*100:.1f}%)")
+    
+    return num_freeze
+
 
 def train(args):
     if args.distributed:
@@ -137,7 +182,7 @@ def train(args):
         world_size = 1
 
     if rank == 0 and not args.no_wandb:
-        wandb.init(project="chatterbox-multilingual-4090-v2")
+        wandb.init(project="chatterbox-multilingual-4090-v3")
         wandb.config.update(args)
 
     model_wrapper = ChatterboxMultilingualTTS.from_pretrained(device)
@@ -147,6 +192,35 @@ def train(args):
     
     t3.to(device)
     
+    # ─── Layer Freezing ───
+    if args.freeze_layers > 0:
+        freeze_bottom_layers(t3, args.freeze_layers)
+    else:
+        total_params = sum(p.numel() for p in t3.parameters())
+        trainable_params = sum(p.numel() for p in t3.parameters() if p.requires_grad)
+        print(f"\n⚡ Full fine-tuning (no layers frozen)")
+        print(f"   Total parameters:     {total_params:,}")
+        print(f"   Trainable parameters: {trainable_params:,}")
+    
+    # ─── Resume from checkpoint ───
+    if args.resume_from:
+        print(f"\n📂 Resuming from checkpoint: {args.resume_from}")
+        state = torch.load(args.resume_from, map_location="cpu", weights_only=True)
+        clean_state = {k.replace("patched_model.", "").replace("model.", ""): v for k, v in state.items()}
+        
+        # Handle vocab size mismatch
+        if "text_emb.weight" in clean_state:
+            state_vocab_size = clean_state["text_emb.weight"].shape[0]
+            model_vocab_size = t3.hp.text_tokens_dict_size
+            if state_vocab_size != model_vocab_size:
+                print(f"   Resizing vocabulary from {model_vocab_size} to {state_vocab_size}")
+                t3.resize_text_embeddings(state_vocab_size)
+        
+        t3.load_state_dict(clean_state, strict=False)
+        del state, clean_state
+        torch.cuda.empty_cache()
+        print(f"   ✅ Checkpoint loaded successfully")
+    
     # Keep auxiliary models in FP32 for signal processing stability
     s3_tokenizer = model_wrapper.s3gen.tokenizer.to(device)
     voice_encoder = model_wrapper.ve.to(device)
@@ -155,67 +229,88 @@ def train(args):
         t3 = DDP(t3, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
     t3.train()
     
-    dataset = MultilingualStreamingDataset(
-        args.repo_id, 
+    dataset = MultilingualLocalDataset(
+        args.data_path, 
         tokenizer, 
-        device="cpu", # Data fetching stays on CPU
-        rank=rank,
-        world_size=world_size
+        device="cpu"
     )
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=args.num_workers, pin_memory=True)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=args.num_workers, pin_memory=True)
     
-    # ─── Optimizer with weight decay for regularization ───
-    optimizer = AdamW(t3.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # ─── Optimizer: only optimize trainable parameters ───
+    trainable_params = [p for p in t3.parameters() if p.requires_grad]
+    optimizer = AdamW(trainable_params, lr=args.lr, weight_decay=args.weight_decay)
     
     if device.type == "cuda":
         (t3.module if args.distributed else t3).tfmr.gradient_checkpointing_enable()
     
-    # ─── Learning Rate Scheduler: Linear Warmup → Cosine Decay ───
-    # Estimate total steps for scheduler (rough: ~6000 steps/epoch based on prev run)
+    # ─── Learning Rate Scheduler ───
     estimated_steps_per_epoch = args.estimated_steps_per_epoch
     total_training_steps = estimated_steps_per_epoch * args.epochs
     warmup_steps = args.warmup_steps
-    cosine_steps = max(total_training_steps - warmup_steps, 1)
     
-    warmup_scheduler = LinearLR(
-        optimizer, 
-        start_factor=0.01,  # Start from 1% of lr
-        end_factor=1.0, 
-        total_iters=warmup_steps
-    )
-    cosine_scheduler = CosineAnnealingLR(
-        optimizer, 
-        T_max=cosine_steps, 
-        eta_min=args.min_lr
-    )
-    scheduler = SequentialLR(
-        optimizer, 
-        schedulers=[warmup_scheduler, cosine_scheduler], 
-        milestones=[warmup_steps]
-    )
+    if args.lr_schedule == "constant":
+        # Warmup → Constant LR (more stable for fine-tuning)
+        warmup_scheduler = LinearLR(
+            optimizer, 
+            start_factor=0.01,
+            end_factor=1.0, 
+            total_iters=warmup_steps
+        )
+        constant_scheduler = LambdaLR(optimizer, lr_lambda=lambda step: 1.0)
+        scheduler = SequentialLR(
+            optimizer, 
+            schedulers=[warmup_scheduler, constant_scheduler], 
+            milestones=[warmup_steps]
+        )
+    elif args.lr_schedule == "cosine":
+        # Warmup → Cosine Decay
+        cosine_steps = max(total_training_steps - warmup_steps, 1)
+        warmup_scheduler = LinearLR(
+            optimizer, 
+            start_factor=0.01,
+            end_factor=1.0, 
+            total_iters=warmup_steps
+        )
+        cosine_scheduler = CosineAnnealingLR(
+            optimizer, 
+            T_max=cosine_steps, 
+            eta_min=args.min_lr
+        )
+        scheduler = SequentialLR(
+            optimizer, 
+            schedulers=[warmup_scheduler, cosine_scheduler], 
+            milestones=[warmup_steps]
+        )
+    else:
+        raise ValueError(f"Unknown lr_schedule: {args.lr_schedule}")
     
     if rank == 0:
-        print(f"{'='*60}")
-        print(f"🚀 Training Config:")
+        print(f"\n{'='*60}")
+        print(f"🚀 Training Config (V3):")
         print(f"   Epochs:            {args.epochs}")
         print(f"   Batch size:        {args.batch_size}")
         print(f"   Accum steps:       {args.accum_steps}")
         print(f"   Effective batch:   {args.batch_size * args.accum_steps}")
         print(f"   Peak LR:          {args.lr}")
+        print(f"   LR schedule:      {args.lr_schedule}")
         print(f"   Min LR:           {args.min_lr}")
         print(f"   Weight decay:     {args.weight_decay}")
         print(f"   Warmup steps:     {warmup_steps}")
         print(f"   Est. total steps: {total_training_steps}")
         print(f"   Grad clip norm:   {args.max_grad_norm}")
         print(f"   Precision:        {'bf16' if args.bf16 else 'fp16' if args.fp16 else 'fp32'}")
+        print(f"   Frozen layers:    {args.freeze_layers}")
+        print(f"   Speech loss wt:   {args.speech_loss_weight}")
+        print(f"   Text loss wt:     {args.text_loss_weight}")
         print(f"   Save every:       {args.save_every} epochs")
         print(f"   Push to hub:      {args.push_to_hub or 'disabled'}")
+        if args.resume_from:
+            print(f"   Resumed from:     {args.resume_from}")
         print(f"{'='*60}")
     
     # ─── AMP Setup ───
     use_amp = (args.fp16 or args.bf16) and device.type == "cuda"
     amp_dtype = torch.bfloat16 if args.bf16 else torch.float16
-    # GradScaler only needed for fp16, bf16 doesn't need it
     scaler = GradScaler("cuda", enabled=args.fp16) if args.fp16 else None
     
     global_step = 0
@@ -239,11 +334,9 @@ def train(args):
                 speech_tokens, _ = s3_tokenizer.forward(wavs)
                 speech_tokens = speech_tokens.to(device)
                 speech_token_lens = torch.tensor([len(s) for s in speech_tokens], device=device)
-                # Pad speech tokens for loss calculation
                 speech_tokens = torch.nn.utils.rnn.pad_sequence(speech_tokens, batch_first=True, padding_value=6562)
                 
                 ve_embeds = voice_encoder.embeds_from_wavs(wavs, sample_rate=S3_SR)
-                # ve_embeds is likely a list of arrays if lengths vary, or a single array
                 if isinstance(ve_embeds, list):
                     speaker_emb = torch.stack([torch.from_numpy(v).to(device).mean(dim=0) for v in ve_embeds])
                 else:
@@ -269,27 +362,30 @@ def train(args):
                     speech_token_lens=speech_token_lens
                 )
             
-            loss = (loss_text + loss_speech) / args.accum_steps
+            # ─── Weighted loss: speech loss is weighted higher ───
+            # This forces the model to focus on acoustic quality rather than
+            # text prediction (which converges much faster and leads to overfitting)
+            weighted_loss = (args.text_loss_weight * loss_text + args.speech_loss_weight * loss_speech) / args.accum_steps
             
             if scaler:
-                scaler.scale(loss).backward()
+                scaler.scale(weighted_loss).backward()
                 if (i+1) % args.accum_steps == 0:
                     scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(t3.parameters(), max_norm=args.max_grad_norm)
+                    torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=args.max_grad_norm)
                     scaler.step(optimizer)
                     scaler.update()
                     optimizer.zero_grad(set_to_none=True)
                     scheduler.step()
             else:
-                loss.backward()
+                weighted_loss.backward()
                 if (i+1) % args.accum_steps == 0:
-                    torch.nn.utils.clip_grad_norm_(t3.parameters(), max_norm=args.max_grad_norm)
+                    torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=args.max_grad_norm)
                     optimizer.step()
                     optimizer.zero_grad(set_to_none=True)
                     scheduler.step()
             
-            # Track losses for epoch averaging
-            raw_loss = loss.item() * args.accum_steps
+            # Track raw (unweighted) losses for monitoring
+            raw_loss = loss_text.item() + loss_speech.item()
             raw_loss_text = loss_text.item()
             raw_loss_speech = loss_speech.item()
             epoch_loss_sum += raw_loss
@@ -310,12 +406,13 @@ def train(args):
                         "loss": raw_loss,
                         "loss_text": raw_loss_text,
                         "loss_speech": raw_loss_speech,
+                        "weighted_loss": weighted_loss.item() * args.accum_steps,
                         "global_step": global_step,
                         "epoch": epoch,
                         "learning_rate": current_lr
                     })
             
-            # Periodic cache clearing on all ranks to prevent fragmentation
+            # Periodic cache clearing
             if (i+1) % 10 == 0:
                 torch.cuda.synchronize()
                 torch.cuda.empty_cache()
@@ -341,18 +438,17 @@ def train(args):
                     "epoch": epoch
                 })
             
-            # Track best loss
             if avg_loss < best_loss:
                 best_loss = avg_loss
                 print(f"   ✨ New best loss: {best_loss:.4f}")
         
-        # ─── Checkpoint Saving (epoch-based only) ───
+        # ─── Checkpoint Saving ───
         is_save_epoch = (epoch % args.save_every == 0) and (epoch > 0)
         is_final_epoch = (epoch == args.epochs - 1)
         
         if rank == 0 and (is_save_epoch or is_final_epoch):
             t3_model = t3.module if args.distributed else t3
-            ckpt_path = f"t3_multilingual_epoch_{epoch}.pt"
+            ckpt_path = f"t3_v3_epoch_{epoch}.pt"
             torch.save(t3_model.state_dict(), ckpt_path)
             print(f"   💾 Saved checkpoint: {ckpt_path}")
             
@@ -368,17 +464,16 @@ def train(args):
                 except Exception as e:
                     print(f"   ⚠️ Push failed: {e}")
             
-            # Clean up old local checkpoint to save disk space (keep only latest + best)
-            # Only delete if it's not the final epoch checkpoint
+            # Clean up old local checkpoint
             if is_save_epoch and not is_final_epoch and epoch > args.save_every:
-                old_ckpt = f"t3_multilingual_epoch_{epoch - args.save_every}.pt"
+                old_ckpt = f"t3_v3_epoch_{epoch - args.save_every}.pt"
                 if os.path.exists(old_ckpt):
                     os.remove(old_ckpt)
                     print(f"   🗑️  Cleaned up old local checkpoint: {old_ckpt}")
 
     if rank == 0:
         print(f"\n{'='*60}")
-        print(f"🏁 Training complete!")
+        print(f"🏁 Training V3 complete!")
         print(f"   Total epochs:    {args.epochs}")
         print(f"   Total steps:     {global_step}")
         print(f"   Best avg loss:   {best_loss:.4f}")
@@ -386,18 +481,29 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--repo_id", type=str, required=True, help="HF Dataset Repo ID")
-    parser.add_argument("--push_to_hub", type=str, help="HF Model Repo ID to push checkpoints")
+    parser.add_argument("--data_path", type=str, default="data/chatterbox-multilingual-data", help="Path to local dataset directory")
+    parser.add_argument("--push_to_hub", type=str, default="Firoj112/chatterbox-multilingual-t3-v2-4090", help="HF Model Repo ID to push checkpoints")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--accum_steps", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=3e-5, help="Peak learning rate")
+    parser.add_argument("--lr", type=float, default=5e-6, help="Peak learning rate (V3 default: 5e-6)")
     parser.add_argument("--min_lr", type=float, default=1e-6, help="Minimum LR for cosine decay")
-    parser.add_argument("--warmup_steps", type=int, default=500, help="Number of linear warmup steps")
+    parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "cosine"],
+                        help="LR schedule after warmup: 'constant' (stable) or 'cosine' (decaying)")
+    parser.add_argument("--warmup_steps", type=int, default=200, help="Number of linear warmup steps")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="AdamW weight decay")
     parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Max gradient norm for clipping")
-    parser.add_argument("--estimated_steps_per_epoch", type=int, default=6000, help="Estimated steps per epoch for scheduler")
-    parser.add_argument("--save_every", type=int, default=5, help="Save checkpoint every N epochs")
+    parser.add_argument("--freeze_layers", type=int, default=15,
+                        help="Number of bottom transformer layers to freeze (model has 30). "
+                             "Freezing preserves universal acoustic patterns while allowing top layers to learn new languages.")
+    parser.add_argument("--speech_loss_weight", type=float, default=3.0,
+                        help="Weight for speech loss. Higher = model focuses more on acoustic quality.")
+    parser.add_argument("--text_loss_weight", type=float, default=1.0,
+                        help="Weight for text loss.")
+    parser.add_argument("--resume_from", type=str, default=None,
+                        help="Path to a checkpoint to resume from (e.g. t3_multilingual_epoch_6.pt)")
+    parser.add_argument("--estimated_steps_per_epoch", type=int, default=6000)
+    parser.add_argument("--save_every", type=int, default=2, help="Save checkpoint every N epochs")
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--bf16", action="store_true", help="Use bfloat16 (recommended for RTX 30/40 series)")
     parser.add_argument("--no_wandb", action="store_true")

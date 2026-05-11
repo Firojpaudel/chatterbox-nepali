@@ -303,7 +303,7 @@ class ChatterboxMultilingualTTS:
         # Norm and tokenize text
         text = punc_norm(text)
         text_tokens = self.tokenizer.text_to_tokens(text, language_id=language_id.lower() if language_id else None).to(self.device)
-        text_tokens = torch.cat([text_tokens, text_tokens], dim=0)  # Need two seqs for CFG
+        text_tokens = torch.cat([text_tokens, text_tokens], dim=0)  # Reverted to cat as stack was breaking it
 
         sot = self.t3.hp.start_text_token
         eot = self.t3.hp.stop_text_token
@@ -331,7 +331,7 @@ class ChatterboxMultilingualTTS:
             if speech_tokens.numel() == 0:
                 print("Warning: Model generated zero valid tokens for this chunk. Skipping.")
                 # Return a tiny bit of silence instead of crashing
-                return torch.zeros((1, 1, 1024))
+                return torch.zeros((1, 1024))
                 
             speech_tokens = speech_tokens.to(self.device)
 

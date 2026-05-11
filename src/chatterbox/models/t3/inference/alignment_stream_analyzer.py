@@ -53,9 +53,11 @@ class AlignmentStreamAnalyzer:
 
         self.complete = False
         self.completed_at = None
+        self.emergency_brake = False
         
         # Track generated tokens for repetition detection
         self.generated_tokens = []
+        self.last_tokens = []
 
         # Using `output_attentions=True` is incompatible with optimized attention kernels, so
         # using it for all layers slows things down too much. We can apply it to just one layer
@@ -120,69 +122,58 @@ class AlignmentStreamAnalyzer:
             self.text_position = cur_text_posn
 
         # Hallucinations at the start of speech show up as activations at the bottom of the attention maps!
-        # To mitigate this, we just wait until there are no activations far off-diagonal in the last 2 tokens,
-        # and there are some strong activations in the first few tokens.
         false_start = (not self.started) and (A[-2:, -2:].max() > 0.1 or A[:, :4].max() < 0.5)
         self.started = not false_start
         if self.started and self.started_at is None:
-            self.started_at = T
+            self.started_at = self.curr_frame_pos
 
-        # Is generation likely complete?
-        self.complete = self.complete or self.text_position >= S - 6
+        # 3. Check for sentence completion (SAFE: S-5)
+        self.complete = self.complete or (self.text_position >= S - 5)
         if self.complete and self.completed_at is None:
-            self.completed_at = T
-
-        # NOTE: EOS rarely assigned activations, and second-last token is often punctuation, so use last 3 tokens.
-        # NOTE: due to the false-start behaviour, we need to make sure we skip activations for the first few tokens.
-        last_text_token_duration = A[15:, -6:].sum()
-
-        # Activations for the final token that last too long are likely hallucinations.
-        long_tail = False
-        if self.complete and S > 6:
-            long_tail = (A[self.completed_at:, -6:].sum(dim=0).max() >= 5) # 200ms
-
-        # If there are activations in previous tokens after generation has completed, assume this is a repetition error.
-        alignment_repetition = False
-        if self.complete and S > 7:
-            alignment_repetition = (A[self.completed_at:, :-7].max(dim=1).values.sum() > 5)
+            self.completed_at = self.curr_frame_pos
         
-        # Track generated tokens for repetition detection
+        # 4. Long tail check (model keeps going after sentence)
+        long_tail = False
+        if self.complete and self.completed_at is not None:
+            # Check if attention is sticking to the last few tokens (punctuation/end)
+            long_tail = (A[self.completed_at:, -6:].sum(dim=0).max() >= 1.5)
+        self.long_tail_triggered = long_tail.item() if isinstance(long_tail, torch.Tensor) else long_tail
+        
+        # 5. Token repetition check
+        token_repetition = False
         if next_token is not None:
             # Convert tensor to scalar if needed
             if isinstance(next_token, torch.Tensor):
                 token_id = next_token.item() if next_token.numel() == 1 else next_token.view(-1)[0].item()
             else:
                 token_id = next_token
+            
+            self.last_tokens.append(token_id)
+            if len(self.last_tokens) > 15:
+                self.last_tokens.pop(0)
+            
+            if len(self.last_tokens) >= 10:
+                most_common = max(set(self.last_tokens), key=self.last_tokens.count)
+                if self.last_tokens.count(most_common) >= 8:
+                    token_repetition = True
+            
             self.generated_tokens.append(token_id)
-            
-            # Keep only last 20 tokens to prevent memory issues
-            if len(self.generated_tokens) > 20:
-                self.generated_tokens = self.generated_tokens[-20:]
-            
-        # Check for excessive token repetition (15x same token in a row)
-        # 15 tokens at 25Hz = ~600ms of a single robotic continuous tone.
-        token_repetition = (
-            len(self.generated_tokens) >= 15 and
-            len(set(self.generated_tokens[-15:])) == 1
-        )
-        
-        if token_repetition:
-            repeated_token = self.generated_tokens[-1]
-            logger.warning(f"Detected abnormal 15x repetition of acoustic token {repeated_token}")
-            
-        # Suppress EoS to prevent early termination
-        # Fix: Devanagari argmax attention can lag far behind text position. 
-        # Only suppress EOS for the first 50% of the sentence to prevent infinite babbling lock-in at the end.
-        if cur_text_posn < int(S * 0.5) and S > 8:
-            logits[..., self.eos_idx] = -2**15
 
-        # If a bad ending is detected, force emit EOS by modifying logits
-        # NOTE: this means logits may be inconsistent with latents!
-        if long_tail or alignment_repetition or token_repetition:
-            logger.warning(f"forcing EOS token, {long_tail=}, {alignment_repetition=}, {token_repetition=}")
-            # (±2**15 is safe for all dtypes >= 16bit)
-            logits = -(2**15) * torch.ones_like(logits)
-            logits[..., self.eos_idx] = 2**15
+        # 6. Emergency brake check
+        if self.complete and self.completed_at is not None:
+            if (self.curr_frame_pos - self.completed_at) > 13:
+                self.emergency_brake = True
+        
+        self.emergency_brake_triggered = self.emergency_brake
+        
+        # 7. Final Force EOS check
+        force_eos = self.emergency_brake or self.long_tail_triggered or token_repetition
+        
+        if force_eos:
+            import logging
+            logging.getLogger(__name__).warning(f"forcing EOS token, long_tail={self.long_tail_triggered}, emergency_brake={self.emergency_brake}, token_repetition={token_repetition}")
+            logits = torch.full_like(logits, -100.0)
+            logits[0, self.eos_idx] = 100.0
 
         self.curr_frame_pos += 1
         return logits

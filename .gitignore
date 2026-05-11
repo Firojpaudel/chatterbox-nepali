@@ -53,9 +53,15 @@ gradio_output.wav
 # Model checkpoints (hosted on Hugging Face, not in git)
 *.safetensors
 *.pt
+lora_nepali_epoch_*/
+lora_maithili_epoch_*/
+checkpoint-*/
+*.log
 
 # Virtual environments
 .venv/
+data/
+.env
 
 # Dev/scratch files (not for GitHub)
 scratch/
@@ -75,3 +81,5 @@ interactive_tts.py
 test_forgetting.py
 test_nepali.py
 chatterbox-nepali-finetune.ipynb
+
+wandb/
