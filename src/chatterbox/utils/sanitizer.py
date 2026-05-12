@@ -183,14 +183,14 @@ def sanitize_text(text, lang="ne"):
             lambda m: f"{sanitize_numbers(m.group(1), lang)} percent",
             text
         )
-        symbol_map = {'&': 'and', '@': 'at', '#': 'hash', '$': 'dollars', '/': 'slash', '+': 'plus', '=': 'equals'}
+        symbol_map = {'&': 'and', '@': 'at', '#': 'hash', '$': 'dollars', '/': ' ', '+': 'plus', '=': 'equals'}
     else:
         text = re.sub(
             r'([0-9\u0966-\u096F,.]+)\s?%',
             lambda m: f"{sanitize_numbers(m.group(1), lang)} प्रतिशत",
             text
         )
-        symbol_map = {'&': 'र', '@': 'एट', '#': 'ह्यास', '$': 'डलर', '/': 'स्ल्याश', '+': 'प्लस', '=': 'बराबर'}
+        symbol_map = {'&': 'र', '@': 'एट', '#': 'ह्यास', '$': 'डलर', '/': ' ', '+': 'प्लस', '=': 'बराबर'}
 
     for sym, word in symbol_map.items():
         text = text.replace(sym, f" {word} ")

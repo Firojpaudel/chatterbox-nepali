@@ -280,6 +280,7 @@ class T3(nn.Module):
         repetition_penalty=1.2,
         cfg_weight=0.5,
         enable_protection=True,
+        lang: str = 'en',
     ):
         """
         Args:
@@ -319,6 +320,7 @@ class T3(nn.Module):
                     text_tokens_slice=(len_cond, len_cond + text_tokens.size(-1)),
                     alignment_layer_idx=9, # TODO: hparam or something?
                     eos_idx=self.hp.stop_speech_token,
+                    lang=lang,
                 )
                 assert alignment_stream_analyzer.eos_idx == self.hp.stop_speech_token
 
@@ -445,16 +447,19 @@ class T3(nn.Module):
         # Concatenate all predicted tokens along the sequence dimension.
         predicted_tokens = torch.cat(predicted, dim=1)  # shape: (B, num_tokens)
         
-        # Simple Trimming:
+        # Surgical Trimming:
         if (self.patched_model.alignment_stream_analyzer is not None
                 and self.patched_model.alignment_stream_analyzer.completed_at is not None):
             trim_to = self.patched_model.alignment_stream_analyzer.completed_at
             
-            # Original simple 2-token buffer
-            buffer = 2
+            # Use a 5-token buffer (~200ms) for natural endings, 
+            # but 0-buffer if the emergency brake was hit
+            ana = self.patched_model.alignment_stream_analyzer
+            buffer = 0 if getattr(ana, 'emergency_brake', False) else 3
             
             trim_to = min(trim_to + buffer, predicted_tokens.shape[1])
             if trim_to < predicted_tokens.shape[1]:
+                print(f"✂️ Trimming {predicted_tokens.shape[1] - trim_to} tokens from the end.")
                 predicted_tokens = predicted_tokens[:, :trim_to]
         
         return predicted_tokens

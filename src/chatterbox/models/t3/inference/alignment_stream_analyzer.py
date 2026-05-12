@@ -30,7 +30,7 @@ class AlignmentAnalysisResult:
 
 
 class AlignmentStreamAnalyzer:
-    def __init__(self, tfmr, queue, text_tokens_slice, alignment_layer_idx=9, eos_idx=0):
+    def __init__(self, tfmr, queue, text_tokens_slice, alignment_layer_idx=9, eos_idx=0, lang="en"):
         """
         Some transformer TTS models implicitly solve text-speech alignment in one or more of their self-attention
         activation maps. This module exploits this to perform online integrity checks which streaming.
@@ -43,7 +43,8 @@ class AlignmentStreamAnalyzer:
         # self.queue = queue
         self.text_tokens_slice = (i, j) = text_tokens_slice
         self.eos_idx = eos_idx
-        self.alignment = torch.zeros(0, j-i)
+        self.lang = lang
+        self.alignment = torch.zeros(0, j-i).to(tfmr.device)
         # self.alignment_bin = torch.zeros(0, j-i)
         self.curr_frame_pos = 0
         self.text_position = 0
@@ -58,6 +59,11 @@ class AlignmentStreamAnalyzer:
         # Track generated tokens for repetition detection
         self.generated_tokens = []
         self.last_tokens = []
+        
+        # Stability counters
+        self.discontinuity_streak = 0
+        self.stagnation_streak = 0
+        self.last_text_posn = -1
 
         # Using `output_attentions=True` is incompatible with optimized attention kernels, so
         # using it for all layers slows things down too much. We can apply it to just one layer
@@ -79,7 +85,7 @@ class AlignmentStreamAnalyzer:
             - `attn_output` has shape [B, H, T0, T0] for the 0th entry, and [B, H, 1, T0+i] for the rest i-th.
             """
             if isinstance(output, tuple) and len(output) > 1 and output[1] is not None:
-                step_attention = output[1].cpu()  # (B, n_heads, T0, Ti)
+                step_attention = output[1]  # Keep on GPU: (B, n_heads, T0, Ti)
                 self.last_aligned_attns[buffer_idx] = step_attention[0, head_idx]  # (T0, Ti)
 
         target_layer = tfmr.layers[layer_idx].self_attn
@@ -101,13 +107,16 @@ class AlignmentStreamAnalyzer:
         i, j = self.text_tokens_slice
         if self.curr_frame_pos == 0:
             # first chunk has conditioning info, text tokens, and BOS token
-            A_chunk = aligned_attn[j:, i:j].clone().cpu() # (T, S)
+            A_chunk = aligned_attn[j:, i:j].clone() # (T, S)
         else:
             # subsequent chunks have 1 frame due to KV-caching
-            A_chunk = aligned_attn[:, i:j].clone().cpu() # (1, S)
+            A_chunk = aligned_attn[:, i:j].clone() # (1, S)
 
-        # TODO: monotonic masking; could have issue b/c spaces are often skipped.
-        A_chunk[:, self.curr_frame_pos + 1:] = 0
+        # Tightened monotonic mask (12 tokens) to force alignment on every word.
+        T, S = A_chunk.shape
+        mask_threshold = self.text_position + 12
+        if mask_threshold < S:
+            A_chunk[:, mask_threshold:] = 0
 
 
         self.alignment = torch.cat((self.alignment, A_chunk), dim=0)
@@ -117,7 +126,8 @@ class AlignmentStreamAnalyzer:
 
         # update position
         cur_text_posn = A_chunk[-1].argmax()
-        discontinuity = not(-4 < cur_text_posn - self.text_position < 7) # NOTE: very lenient!
+        # Widened window to allow for more natural look-ahead context (-5 to +20)
+        discontinuity = not(-5 < cur_text_posn - self.text_position < 20) 
         if not discontinuity:
             self.text_position = cur_text_posn
 
@@ -127,8 +137,16 @@ class AlignmentStreamAnalyzer:
         if self.started and self.started_at is None:
             self.started_at = self.curr_frame_pos
 
-        # 3. Check for sentence completion (SAFE: S-5)
-        self.complete = self.complete or (self.text_position >= S - 5)
+        # 3. Check for sentence completion
+        # S-2 is slightly more conservative than S-3 to prevent premature completion
+        self.complete = self.complete or (self.text_position >= S - 2)
+        
+        # Stagnation check: if we are near the end and attention is sticking
+        if not self.complete and self.text_position >= S - 2:
+            # sum attention on the last 2 tokens over the last 2 frames
+            if A[-2:, -2:].sum() > 1.5:
+                self.complete = True
+
         if self.complete and self.completed_at is None:
             self.completed_at = self.curr_frame_pos
         
@@ -136,7 +154,7 @@ class AlignmentStreamAnalyzer:
         long_tail = False
         if self.complete and self.completed_at is not None:
             # Check if attention is sticking to the last few tokens (punctuation/end)
-            long_tail = (A[self.completed_at:, -6:].sum(dim=0).max() >= 1.5)
+            long_tail = (A[self.completed_at:, -6:].sum(dim=0).max() >= 0.8)
         self.long_tail_triggered = long_tail.item() if isinstance(long_tail, torch.Tensor) else long_tail
         
         # 5. Token repetition check
@@ -159,11 +177,35 @@ class AlignmentStreamAnalyzer:
             
             self.generated_tokens.append(token_id)
 
-        # 6. Emergency brake check
         if self.complete and self.completed_at is not None:
-            if (self.curr_frame_pos - self.completed_at) > 13:
+            # Language-aware delay: English needs more time to finish syllables (~320ms)
+            # Nepali/Maithili are crisper and need less (~80ms)
+            delay = 8 if self.lang == 'en' else 2
+            if (self.curr_frame_pos - self.completed_at) > delay:
                 self.emergency_brake = True
         
+        # 6b. Stability Checks (Discontinuity & Stagnation)
+        if discontinuity:
+            self.discontinuity_streak += 1
+        else:
+            self.discontinuity_streak = 0
+            
+        if cur_text_posn == self.last_text_posn:
+            self.stagnation_streak += 1
+        else:
+            self.stagnation_streak = 0
+        self.last_text_posn = cur_text_posn
+
+        # If model is lost (discontinuous) for 80 frames (~3.2s), or stuck for 150 frames (~6s)
+        # We ignore discontinuity during the first 50 steps (warm-up period)
+        is_lost = self.discontinuity_streak > 80 and self.curr_frame_pos > 50
+        is_stuck = self.stagnation_streak > 150
+        
+        if is_lost or is_stuck:
+            import logging
+            logging.getLogger(__name__).warning(f"Stability brake triggered: discontinuity={self.discontinuity_streak}, stagnation={self.stagnation_streak}. Forcing EOS.")
+            self.emergency_brake = True
+
         self.emergency_brake_triggered = self.emergency_brake
         
         # 7. Final Force EOS check

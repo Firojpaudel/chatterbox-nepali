@@ -158,6 +158,15 @@ class ChatterboxMultilingualTTS:
             print(f"Warning: Could not initialize perth watermarker ({e}). Skipping watermarking.")
             self.watermarker = None
 
+    def compile(self):
+        """
+        Compile the underlying transformer for faster inference.
+        """
+        import torch
+        print("📦 Compiling T3 Transformer (this may take a minute)...")
+        self.t3.tfmr = torch.compile(self.t3.tfmr)
+        self.t3.compiled = True
+
     @classmethod
     def get_supported_languages(cls):
         """Return dictionary of supported language codes and names."""
@@ -321,6 +330,7 @@ class ChatterboxMultilingualTTS:
                 min_p=min_p,
                 top_p=top_p,
                 enable_protection=enable_protection,
+                lang=language_id if language_id else 'en',
             )
             # Extract only the conditional batch.
             speech_tokens = speech_tokens[0]

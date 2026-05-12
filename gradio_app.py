@@ -187,6 +187,13 @@ def switch_model(model_type):
                 print(f"✅ LoRA Active! Trainable params: {trainable:,}")
                 
                 model.t3.to(DEVICE).eval()
+                
+                # Merge LoRA for maximum performance (RTX 4090 win)
+                try:
+                    model.t3.tfmr = model.t3.tfmr.merge_and_unload()
+                    print("🚀 LoRA Merged into base weights for maximum speed.")
+                except Exception as e:
+                    print(f"⚠️ Could not merge LoRA (performance may be lower): {e}")
             else:
                 # Handle standard .pt / .safetensors files
                 if filename.endswith(".safetensors"):
@@ -207,7 +214,9 @@ def switch_model(model_type):
                 model.t3.load_state_dict(clean_state, strict=False)
                 model.t3.to(DEVICE).eval()
             
-            model.t3.compiled = False
+            # Enable TensorFloat32 for better 4090 performance
+            torch.set_float32_matmul_precision('high')
+            
             gc.collect()
             CURRENT_MODEL_TYPE = model_type
             print(f"Successfully loaded {model_type}")
@@ -247,32 +256,43 @@ def switch_model(model_type):
         traceback.print_exc()
         return f"Error: {str(e)}"
 
-def smart_chunk(text, max_chars=250):
-    # Split by sentence markers and newlines
-    # Using a regex that preserves the delimiters
-    parts = re.split(r'([।\.?!\n])', text)
+def smart_chunk(text, max_chars=300):
+    # 1. First split by sentence markers
+    sentences = re.split(r'([।\.?!\n])', text)
     
+    parts = []
+    for i in range(0, len(sentences)-1, 2):
+        s = (sentences[i] + sentences[i+1]).strip()
+        if not s: continue
+        
+        if len(s) > 150 and "," in s:
+            # 2. If a sentence is long, split by commas as well
+            subparts = re.split(r'(,)', s)
+            for j in range(0, len(subparts)-1, 2):
+                parts.append(subparts[j] + subparts[j+1])
+            if len(subparts) % 2 != 0:
+                parts.append(subparts[-1])
+        else:
+            parts.append(s)
+            
+    # Handle last part if any
+    if len(sentences) % 2 != 0 and sentences[-1].strip():
+        parts.append(sentences[-1].strip())
+
     final_chunks = []
     current_chunk = ""
-    
-    for i in range(0, len(parts)-1, 2):
-        sentence = (parts[i] + parts[i+1]).strip()
-        if not sentence: continue
-        
-        if len(current_chunk) + len(sentence) < max_chars:
-            current_chunk += " " + sentence
+    for part in parts:
+        if not part.strip(): continue
+        if len(current_chunk) + len(part) < max_chars:
+            current_chunk += " " + part
         else:
             if current_chunk.strip():
                 final_chunks.append(current_chunk.strip())
-            current_chunk = sentence
+            current_chunk = part
             
-    # Handle the last part if regex didn't pair it
-    if len(parts) % 2 != 0 and parts[-1].strip():
-        current_chunk += " " + parts[-1].strip()
-        
     if current_chunk.strip():
         final_chunks.append(current_chunk.strip())
-    
+        
     return [c for c in final_chunks if c.strip()]
 
 def generate_tts_audio(
