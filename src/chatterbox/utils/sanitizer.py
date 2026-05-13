@@ -1,4 +1,5 @@
 import re
+import logging
 
 # --- CONFIG ---
 ACRONYM_MAP_NE = {
@@ -276,6 +277,51 @@ def sanitize_text(text, lang="ne"):
     print(f"DEBUG [Sanitizer]: '{text}'")
 
     return text
+
+
+def smart_chunk(text, max_chars=300):
+    """
+    Split long text into logical chunks (sentences, then commas if needed)
+    to prevent model skipping/hallucinations on long conditioning.
+    """
+    # 1. First split by sentence markers
+    # Using Devanagari Danda (।) as well as Western markers
+    sentences = re.split(r'([।\.?!\n])', text)
+    
+    parts = []
+    for i in range(0, len(sentences)-1, 2):
+        s = (sentences[i] + sentences[i+1]).strip()
+        if not s: continue
+        
+        if len(s) > 150 and "," in s:
+            # 2. If a sentence is long, split by commas as well
+            subparts = re.split(r'(,)', s)
+            for j in range(0, len(subparts)-1, 2):
+                parts.append(subparts[j] + subparts[j+1])
+            if len(subparts) % 2 != 0:
+                parts.append(subparts[-1])
+        else:
+            parts.append(s)
+            
+    # Handle last part if any
+    if len(sentences) % 2 != 0 and sentences[-1].strip():
+        parts.append(sentences[-1].strip())
+
+    final_chunks = []
+    current_chunk = ""
+    for part in parts:
+        if not part.strip(): continue
+        if len(current_chunk) + len(part) < max_chars:
+            current_chunk += (" " if current_chunk else "") + part
+        else:
+            if current_chunk.strip():
+                final_chunks.append(current_chunk.strip())
+            current_chunk = part
+            
+    if current_chunk.strip():
+        final_chunks.append(current_chunk.strip())
+        
+    return [c for c in final_chunks if c.strip()]
 
 
 if __name__ == "__main__":

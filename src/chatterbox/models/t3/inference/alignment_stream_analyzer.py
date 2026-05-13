@@ -64,6 +64,7 @@ class AlignmentStreamAnalyzer:
         self.discontinuity_streak = 0
         self.stagnation_streak = 0
         self.last_text_posn = -1
+        self.hooks = []
 
         # Using `output_attentions=True` is incompatible with optimized attention kernels, so
         # using it for all layers slows things down too much. We can apply it to just one layer
@@ -90,7 +91,8 @@ class AlignmentStreamAnalyzer:
 
         target_layer = tfmr.layers[layer_idx].self_attn
         # Register hook and store the handle
-        target_layer.register_forward_hook(attention_forward_hook)
+        handle = target_layer.register_forward_hook(attention_forward_hook)
+        self.hooks.append(handle)
         if hasattr(tfmr, 'config') and hasattr(tfmr.config, 'output_attentions'):
             self.original_output_attentions = tfmr.config.output_attentions
             self.original_attn_implementation = getattr(tfmr.config, '_attn_implementation', None)
@@ -219,3 +221,30 @@ class AlignmentStreamAnalyzer:
 
         self.curr_frame_pos += 1
         return logits
+    def close(self):
+        """Remove all hooks to prevent memory/performance leaks."""
+        for handle in self.hooks:
+            handle.remove()
+        self.hooks = []
+        logger.info("🛑 [AlignmentStreamAnalyzer] Hooks removed.")
+
+    def reset(self, text_tokens_slice):
+        """Reset state for a new chunk of text while keeping hooks alive."""
+        self.text_tokens_slice = text_tokens_slice
+        i, j = text_tokens_slice
+        self.alignment = torch.zeros(0, j - i).to(self.alignment.device)
+        self.curr_frame_pos = 0
+        self.text_position = 0
+        self.started = False
+        self.started_at = None
+        self.complete = False
+        self.completed_at = None
+        self.emergency_brake = False
+        self.generated_tokens = []
+        self.last_tokens = []
+        self.discontinuity_streak = 0
+        self.stagnation_streak = 0
+        self.last_text_posn = -1
+        self.emergency_brake_triggered = False
+        self.long_tail_triggered = False
+        print(f"🔄 [AlignmentStreamAnalyzer] Reset for text slice: {text_tokens_slice}")

@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatterbox Streaming Playground</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Outfit:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.5);
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --text: #f8fafc;
+            --text-dim: #94a3b8;
+            --accent: #10b981;
+            --danger: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 900px;
+            width: 100%;
+            background: var(--card-bg);
+            padding: 2.5rem;
+            border-radius: 24px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, #fff 0%, #94a3b8 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-align: center;
+        }
+
+        p.subtitle {
+            text-align: center;
+            color: var(--text-dim);
+            margin-bottom: 2rem;
+        }
+
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        textarea {
+            width: 100%;
+            height: 120px;
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 1rem;
+            color: var(--text);
+            font-size: 1.1rem;
+            resize: none;
+            transition: all 0.3s ease;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px var(--primary-glow);
+        }
+
+        .actions {
+            display: flex;
+            gap: 1rem;
+        }
+
+        button {
+            flex: 1;
+            padding: 1rem;
+            border-radius: 12px;
+            border: none;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        button.primary {
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 4px 14px 0 var(--primary-glow);
+        }
+
+        button.primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px 0 var(--primary-glow);
+        }
+
+        button.primary:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+
+        .metric-card {
+            background: rgba(15, 23, 42, 0.4);
+            padding: 1.25rem;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            text-align: center;
+        }
+
+        .metric-label {
+            font-size: 0.875rem;
+            color: var(--text-dim);
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .metric-value {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .metric-value.warning {
+            color: var(--danger);
+        }
+
+        .visualizer {
+            width: 100%;
+            height: 100px;
+            background: rgba(15, 23, 42, 0.8);
+            margin-top: 2rem;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--text-dim);
+            display: inline-block;
+            margin-right: 0.5rem;
+        }
+
+        .status-dot.active {
+            background: var(--accent);
+            box-shadow: 0 0 10px var(--accent);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.4; }
+            100% { opacity: 1; }
+        }
+
+        .status-text {
+            font-size: 0.875rem;
+            color: var(--text-dim);
+            margin-top: 1rem;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Chatterbox Streaming</h1>
+        <p class="subtitle">Ultra-low latency Nepali TTS playground</p>
+
+        <div class="controls">
+            <textarea id="textInput" placeholder="Enter Nepali text here...">नेपाल दक्षिण एसियामा अवस्थित एक भूपरिवेष्टित देश हो। यसको जनसंख्या लगभग ३ करोड छ।</textarea>
+            
+            <div class="actions">
+                <button id="speakBtn" class="primary">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                    Speak
+                </button>
+                <button id="stopBtn" style="background: rgba(255,255,255,0.1); color: var(--text);">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16"></rect></svg>
+                    Stop
+                </button>
+            </div>
+        </div>
+
+        <div class="metrics">
+            <div class="metric-card">
+                <div class="metric-label">TTFB (ms)</div>
+                <div id="ttfbValue" class="metric-value">-</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Inter-chunk Delta (ms)</div>
+                <div id="deltaValue" class="metric-value">-</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Avg Jitter (ms)</div>
+                <div id="jitterValue" class="metric-value">-</div>
+            </div>
+        </div>
+
+        <div class="visualizer">
+            <canvas id="oscilloscope"></canvas>
+        </div>
+
+        <div class="status-text">
+            <span id="statusDot" class="status-dot"></span>
+            <span id="statusLabel">Ready</span>
+        </div>
+    </div>
+
+    <script>
+        const textInput = document.getElementById('textInput');
+        const speakBtn = document.getElementById('speakBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const ttfbValue = document.getElementById('ttfbValue');
+        const deltaValue = document.getElementById('deltaValue');
+        const jitterValue = document.getElementById('jitterValue');
+        const statusLabel = document.getElementById('statusLabel');
+        const statusDot = document.getElementById('statusDot');
+        const canvas = document.getElementById('oscilloscope');
+        const ctx = canvas.getContext('2d');
+
+        let audioCtx;
+        let ws;
+        let nextStartTime = 0;
+        let lastChunkArrival = 0;
+        let deltas = [];
+
+        // Oscilloscope setup
+        let analyser;
+        let dataArray;
+        function setupVisualizer() {
+            if (!analyser) {
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 2048;
+                const bufferLength = analyser.frequencyBinCount;
+                dataArray = new Uint8Array(bufferLength);
+            }
+        }
+
+        function draw() {
+            requestAnimationFrame(draw);
+            if (!analyser) return;
+
+            analyser.getByteTimeDomainData(dataArray);
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#6366f1';
+            ctx.beginPath();
+
+            const sliceWidth = canvas.width * 1.0 / dataArray.length;
+            let x = 0;
+
+            for (let i = 0; i < dataArray.length; i++) {
+                const v = dataArray[i] / 128.0;
+                const y = v * canvas.height / 2;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+                x += sliceWidth;
+            }
+            ctx.lineTo(canvas.width, canvas.height / 2);
+            ctx.stroke();
+        }
+        draw();
+
+        speakBtn.onclick = async () => {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: 24000 // Match model SR
+                });
+                setupVisualizer();
+            }
+
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
+
+            const text = textInput.value;
+            if (!text) return;
+
+            speakBtn.disabled = true;
+            statusLabel.innerText = 'Connecting...';
+            statusDot.className = 'status-dot active';
+            
+            ttfbValue.innerText = '-';
+            deltaValue.innerText = '-';
+            jitterValue.innerText = '-';
+            deltas = [];
+            
+            nextStartTime = audioCtx.currentTime + 0.1; // Small buffer for first chunk
+            lastChunkArrival = Date.now();
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+            ws.binaryType = 'arraybuffer';
+
+            ws.onmessage = async (event) => {
+                if (typeof event.data === 'string') {
+                    const msg = JSON.parse(event.data);
+                    if (msg.status === 'starting') {
+                        statusLabel.innerText = 'Streaming...';
+                    } else if (msg.status === 'streaming') {
+                        if (msg.ttfb) {
+                            ttfbValue.innerText = Math.round(msg.ttfb);
+                        }
+                        
+                        const now = Date.now();
+                        const arrivalDelta = now - lastChunkArrival;
+                        lastChunkArrival = now;
+                        
+                        if (arrivalDelta > 1) { // Filter out near-zero deltas if multiple messages sent together
+                            deltas.push(arrivalDelta);
+                            deltaValue.innerText = Math.round(arrivalDelta);
+                            
+                            if (deltas.length > 1) {
+                                const avg = deltas.reduce((a, b) => a + b) / deltas.length;
+                                const jitter = deltas.slice(-10).reduce((acc, val) => acc + Math.abs(val - avg), 0) / Math.min(deltas.length, 10);
+                                jitterValue.innerText = Math.round(jitter);
+                                
+                                if (arrivalDelta > 100) deltaValue.classList.add('warning');
+                                else deltaValue.classList.remove('warning');
+                            }
+                        }
+                        
+                        if (msg.is_final) {
+                            // Handled by complete status usually
+                        }
+                    } else if (msg.status === 'complete') {
+                        statusLabel.innerText = 'Finished';
+                        statusDot.className = 'status-dot';
+                        speakBtn.disabled = false;
+                    } else if (msg.status === 'error') {
+                        statusLabel.innerText = 'Error: ' + msg.message;
+                        statusDot.className = 'status-dot';
+                        speakBtn.disabled = false;
+                    }
+                } else {
+                    // Audio binary data
+                    const audioData = new Float32Array(event.data);
+                    const buffer = audioCtx.createBuffer(1, audioData.length, 24000);
+                    buffer.getChannelData(0).set(audioData);
+
+                    const source = audioCtx.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(analyser);
+                    analyser.connect(audioCtx.destination);
+
+                    const startTime = Math.max(nextStartTime, audioCtx.currentTime);
+                    source.start(startTime);
+                    nextStartTime = startTime + buffer.duration;
+                }
+            };
+
+            ws.onclose = () => {
+                speakBtn.disabled = false;
+                if (statusLabel.innerText === 'Streaming...') {
+                    statusLabel.innerText = 'Ready';
+                    statusDot.className = 'status-dot';
+                }
+            };
+
+            ws.onerror = (err) => {
+                console.error('WS Error:', err);
+                statusLabel.innerText = 'Connection Error';
+                statusDot.className = 'status-dot';
+                speakBtn.disabled = false;
+            };
+
+            ws.onopen = () => {
+                ws.send(JSON.stringify({
+                    text: text,
+                    language: 'ne'
+                }));
+            };
+        };
+
+        stopBtn.onclick = () => {
+            if (ws) ws.close();
+            if (audioCtx) {
+                audioCtx.close();
+                audioCtx = null;
+                analyser = null;
+            }
+            speakBtn.disabled = false;
+            statusLabel.innerText = 'Stopped';
+            statusDot.className = 'status-dot';
+        };
+
+        // Resize canvas
+        function resize() {
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+        }
+        window.onresize = resize;
+        resize();
+
+    </script>
+</body>
+</html>

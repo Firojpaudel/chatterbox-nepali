@@ -90,7 +90,7 @@ class T3HuggingfaceBackend(LlamaPreTrainedModel, GenerationMixin):
         has_cache = past_key_values is not None and len(past_key_values) > 0
         assert not (is_large_input and has_cache)
         assert return_dict
-        assert output_hidden_states
+        # assert output_hidden_states (removed for high-speed streaming)
 
         tfmr_out = self.model(
             inputs_embeds=inputs_embeds,
@@ -100,17 +100,15 @@ class T3HuggingfaceBackend(LlamaPreTrainedModel, GenerationMixin):
             output_hidden_states=output_hidden_states,
             return_dict=True,
         )
-        hidden_states = tfmr_out.hidden_states[-1]  # (B, seq, dim)
+        # Use last_hidden_state (always available) instead of hidden_states[-1]
+        # This allows callers to set output_hidden_states=False for speed
+        hidden_states = tfmr_out.last_hidden_state  # (B, seq, dim)
 
         logits = self.speech_head(hidden_states)
-        # assert inputs_embeds.size(0) == 1 # (disabled for CFG)
-
-        # NOTE: hallucination handler may modify logits to force emit an EOS token
-        # logits = self.alignment_stream_analyzer.step(logits)
 
         return CausalLMOutputWithCrossAttentions(
             logits=logits,
             past_key_values=tfmr_out.past_key_values,
-            hidden_states=tfmr_out.hidden_states,
-            attentions=tfmr_out.attentions,
+            hidden_states=tfmr_out.hidden_states if output_hidden_states else None,
+            attentions=tfmr_out.attentions if output_attentions else None,
         )

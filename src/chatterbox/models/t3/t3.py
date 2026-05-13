@@ -462,6 +462,9 @@ class T3(nn.Module):
                 print(f"✂️ Trimming {predicted_tokens.shape[1] - trim_to} tokens from the end.")
                 predicted_tokens = predicted_tokens[:, :trim_to]
         
+        if (self.patched_model.alignment_stream_analyzer is not None):
+            self.patched_model.alignment_stream_analyzer.close()
+            
         return predicted_tokens
 
     @torch.inference_mode()
