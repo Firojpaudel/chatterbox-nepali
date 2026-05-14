@@ -167,7 +167,7 @@ class T3(nn.Module):
         speech_token_lens: torch.LongTensor,
         training=False,
     ):
-        _ensure_BOT_EOT(text_tokens, self.hp)
+        # _ensure_BOT_EOT(text_tokens, self.hp) # Disabled for Turbo which doesn't pad during inference
 
         # prepare custom input embeds
         embeds, len_cond = self.prepare_input_embeds(

@@ -1,256 +1,408 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ne">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chatterbox Streaming Playground</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Outfit:wght@400;700&display=swap" rel="stylesheet">
+    <title>Chatterbox • Nepali TTS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
     <style>
-        :root {
-            --primary: #6366f1;
-            --primary-glow: rgba(99, 102, 241, 0.5);
-            --bg: #0f172a;
-            --card-bg: #1e293b;
-            --text: #f8fafc;
-            --text-dim: #94a3b8;
-            --accent: #10b981;
-            --danger: #ef4444;
-        }
+:root {
+    /* Colors - Inspired by ClickHouse */
+    --canvas: #0a0a0a;
+    --primary: #faff69;
+    --primary-active: #e6eb52;
+    --primary-disabled: #3a3a1f;
+    --surface-card: #1a1a1a;
+    --surface-elevated: #242424;
+    --hairline: #2a2a2a;
+    --hairline-strong: #3a3a3a;
+    
+    --text-main: #ffffff;
+    --text-body: #cccccc;
+    --text-muted: #888888;
+    --text-on-primary: #0a0a0a;
+    
+    --success: #22c55e;
+    --danger: #ef4444;
+    --info: #3b82f6;
 
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+    /* Spacing */
+    --spacing-section: 96px;
+    --spacing-xl: 32px;
+    --spacing-lg: 24px;
+    --spacing-md: 16px;
 
-        body {
-            font-family: 'Inter', sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 2rem;
-        }
+    /* Border Radius */
+    --rounded-md: 8px;
+    --rounded-lg: 12px;
+    --rounded-pill: 9999px;
+}
 
-        .container {
-            max-width: 900px;
-            width: 100%;
-            background: var(--card-bg);
-            padding: 2.5rem;
-            border-radius: 24px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
 
-        h1 {
-            font-family: 'Outfit', sans-serif;
-            font-size: 2.5rem;
-            margin-bottom: 0.5rem;
-            background: linear-gradient(135deg, #fff 0%, #94a3b8 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            text-align: center;
-        }
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: var(--canvas);
+}
+::-webkit-scrollbar-thumb {
+    background: var(--hairline-strong);
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
 
-        p.subtitle {
-            text-align: center;
-            color: var(--text-dim);
-            margin-bottom: 2rem;
-        }
+body {
+    font-family: 'Inter', sans-serif;
+    background-color: var(--canvas);
+    color: var(--text-main);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    line-height: 1.55;
+    padding: var(--spacing-xl) 1rem;
+}
 
-        .controls {
-            display: flex;
-            flex-direction: column;
-            gap: 1.5rem;
-        }
+.app-container {
+    max-width: 1100px;
+    width: 100%;
+}
 
-        textarea {
-            width: 100%;
-            height: 120px;
-            background: rgba(15, 23, 42, 0.5);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 12px;
-            padding: 1rem;
-            color: var(--text);
-            font-size: 1.1rem;
-            resize: none;
-            transition: all 0.3s ease;
-        }
+header {
+    text-align: left;
+    margin-bottom: var(--spacing-xl);
+    border-bottom: 1px solid var(--hairline);
+    padding-bottom: var(--spacing-md);
+}
 
-        textarea:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px var(--primary-glow);
-        }
+h1 {
+    font-size: clamp(2rem, 5vw, 3.5rem);
+    font-weight: 700;
+    letter-spacing: -2px;
+    color: var(--text-main);
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+}
 
-        .actions {
-            display: flex;
-            gap: 1rem;
-        }
+.subtitle {
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    font-weight: 400;
+    letter-spacing: -0.3px;
+}
 
-        button {
-            flex: 1;
-            padding: 1rem;
-            border-radius: 12px;
-            border: none;
-            font-weight: 600;
-            font-size: 1rem;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.5rem;
-        }
+.main-content {
+    display: grid;
+    grid-template-columns: 1.5fr 1fr;
+    gap: var(--spacing-xl);
+    align-items: start;
+}
 
-        button.primary {
-            background: var(--primary);
-            color: white;
-            box-shadow: 0 4px 14px 0 var(--primary-glow);
-        }
+@media (max-width: 900px) {
+    .main-content {
+        grid-template-columns: 1fr;
+    }
+}
 
-        button.primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px 0 var(--primary-glow);
-        }
+.editor-card {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: var(--rounded-lg);
+    padding: var(--spacing-xl);
+}
 
-        button.primary:active {
-            transform: translateY(0);
-        }
+.textarea-wrapper {
+    background: #000;
+    border: 1px solid var(--hairline-strong);
+    border-radius: var(--rounded-md);
+    margin-bottom: var(--spacing-md);
+    transition: all 0.2s ease;
+    position: relative;
+    overflow: hidden;
+}
 
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none !important;
-        }
+.textarea-wrapper:hover {
+    border-color: var(--text-muted);
+}
 
-        .metrics {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-            margin-top: 2rem;
-        }
+.textarea-wrapper:focus-within {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 1px var(--primary);
+}
 
-        .metric-card {
-            background: rgba(15, 23, 42, 0.4);
-            padding: 1.25rem;
-            border-radius: 16px;
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            text-align: center;
-        }
+textarea {
+    width: 100%;
+    min-height: 380px; /* Larger input field */
+    background: transparent;
+    border: none;
+    padding: var(--spacing-lg);
+    color: var(--text-main);
+    font-size: 1.2rem;
+    font-family: 'JetBrains Mono', monospace;
+    resize: vertical;
+    outline: none;
+    line-height: 1.7;
+}
 
-        .metric-label {
-            font-size: 0.875rem;
-            color: var(--text-dim);
-            margin-bottom: 0.5rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
+.editor-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-lg);
+}
 
-        .metric-value {
-            font-family: 'Outfit', sans-serif;
-            font-size: 1.75rem;
-            font-weight: 700;
-            color: var(--accent);
-        }
+.char-count {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
 
-        .metric-value.warning {
-            color: var(--danger);
-        }
+.sample-phrases {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
 
-        .visualizer {
-            width: 100%;
-            height: 100px;
-            background: rgba(15, 23, 42, 0.8);
-            margin-top: 2rem;
-            border-radius: 12px;
-            overflow: hidden;
-            position: relative;
-        }
+.phrase-tag {
+    padding: 6px 12px;
+    background: var(--surface-elevated);
+    border: 1px solid var(--hairline);
+    border-radius: var(--rounded-pill);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
 
-        canvas {
-            width: 100%;
-            height: 100%;
-        }
+.phrase-tag:hover {
+    color: var(--primary);
+    border-color: var(--primary);
+    background: #000;
+}
 
-        .status-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: var(--text-dim);
-            display: inline-block;
-            margin-right: 0.5rem;
-        }
+.btn-group {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: var(--spacing-lg);
+}
 
-        .status-dot.active {
-            background: var(--accent);
-            box-shadow: 0 0 10px var(--accent);
-            animation: pulse 1.5s infinite;
-        }
+button {
+    padding: 14px 28px;
+    border-radius: var(--rounded-md);
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    border: none;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
 
-        @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.4; }
-            100% { opacity: 1; }
-        }
+.btn-primary {
+    background: var(--primary);
+    color: var(--text-on-primary);
+}
 
-        .status-text {
-            font-size: 0.875rem;
-            color: var(--text-dim);
-            margin-top: 1rem;
-            text-align: center;
-        }
+.btn-primary:hover {
+    background: var(--primary-active);
+    transform: translateY(-1px);
+}
+
+.btn-primary:active {
+    transform: translateY(0);
+}
+
+.btn-secondary {
+    background: var(--surface-elevated);
+    color: var(--text-main);
+    border: 1px solid var(--hairline);
+}
+
+.btn-secondary:hover {
+    background: var(--hairline-strong);
+    color: var(--primary);
+}
+
+button:disabled {
+    opacity: 0.2;
+    cursor: not-allowed;
+    transform: none !important;
+}
+
+/* Sidebar Stats & Visuals */
+.sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-lg);
+}
+
+.stats-card {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: var(--rounded-lg);
+    padding: var(--spacing-lg);
+}
+
+.stat-item {
+    margin-bottom: var(--spacing-lg);
+}
+
+.stat-item:last-child {
+    margin-bottom: 0;
+}
+
+.stat-label {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--text-muted);
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.stat-value {
+    font-size: 56px; /* Even larger stat display */
+    font-weight: 700;
+    color: var(--primary);
+    line-height: 1;
+    letter-spacing: -2px;
+}
+
+.visualizer-container {
+    width: 100%;
+    height: 180px;
+    background: #000;
+    border: 1px solid var(--hairline);
+    border-radius: var(--rounded-lg);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.status-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--hairline);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--hairline-strong);
+}
+
+.status-dot.active {
+    background: var(--success);
+    box-shadow: 0 0 12px var(--success);
+}
+
+.status-dot.error {
+    background: var(--danger);
+    box-shadow: 0 0 12px var(--danger);
+}
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Chatterbox Streaming</h1>
-        <p class="subtitle">Ultra-low latency Nepali TTS playground</p>
+    <div class="app-container">
+        <header>
+            <h1>Chatterbox</h1>
+            <p class="subtitle">ULTRA-LOW LATENCY NEPALI TTS ENGINE</p>
+        </header>
 
-        <div class="controls">
-            <textarea id="textInput" placeholder="Enter Nepali text here...">नेपाल दक्षिण एसियामा अवस्थित एक भूपरिवेष्टित देश हो। यसको जनसंख्या लगभग ३ करोड छ।</textarea>
-            
-            <div class="actions">
-                <button id="speakBtn" class="primary">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                    Speak
-                </button>
-                <button id="stopBtn" style="background: rgba(255,255,255,0.1); color: var(--text);">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16"></rect></svg>
-                    Stop
-                </button>
-            </div>
-        </div>
+        <main class="main-content">
+            <section class="editor-card">
+                <div class="textarea-wrapper">
+                    <textarea id="textInput" spellcheck="false" placeholder="Type or paste Nepali text here...">नमस्ते! म च्याटरबक्स नेपाली टीटीएस हुँ। म निकै छिटो र प्रस्ट बोल्न सक्छु।</textarea>
+                </div>
+                
+                <div class="editor-footer">
+                    <div class="sample-phrases">
+                        <span class="phrase-tag" data-text="नेपाल दक्षिण एसियामा अवस्थित एक भूपरिवेष्टित देश हो।">Intro</span>
+                        <span class="phrase-tag" data-text="आजको मौसम निकै राम्रो छ, बाहिर घुम्न जान सकिन्छ।">Weather</span>
+                        <span class="phrase-tag" data-text="च्याटरबक्स एउटा अत्याधुनिक नेपाली टेक्स्ट-टु-स्पीच प्रविधि हो।">Tech</span>
+                    </div>
+                    <div class="char-count" id="charCount">0 characters</div>
+                </div>
 
-        <div class="metrics">
-            <div class="metric-card">
-                <div class="metric-label">TTFB (ms)</div>
-                <div id="ttfbValue" class="metric-value">-</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">Inter-chunk Delta (ms)</div>
-                <div id="deltaValue" class="metric-value">-</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">Avg Jitter (ms)</div>
-                <div id="jitterValue" class="metric-value">-</div>
-            </div>
-        </div>
+                <div class="btn-group">
+                    <button id="speakBtn" class="btn-primary">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                        Deploy Stream
+                    </button>
+                    <button id="stopBtn" class="btn-secondary">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
+                        Abort
+                    </button>
+                </div>
 
-        <div class="visualizer">
-            <canvas id="oscilloscope"></canvas>
-        </div>
+                <div class="status-bar">
+                    <div id="statusDot" class="status-dot"></div>
+                    <span id="statusLabel">System Ready</span>
+                </div>
+            </section>
 
-        <div class="status-text">
-            <span id="statusDot" class="status-dot"></span>
-            <span id="statusLabel">Ready</span>
-        </div>
+            <aside class="sidebar">
+                <div class="stats-card">
+                    <div class="stat-item">
+                        <span class="stat-label">TTFB</span>
+                        <div id="ttfbValue" class="stat-value">0ms</div>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Chunk Latency</span>
+                        <div id="deltaValue" class="stat-value">0ms</div>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Jitter</span>
+                        <div id="jitterValue" class="stat-value">0ms</div>
+                    </div>
+                </div>
+
+                <div class="visualizer-container">
+                    <canvas id="visualizer"></canvas>
+                </div>
+            </aside>
+        </main>
     </div>
 
     <script>
         const textInput = document.getElementById('textInput');
+        const charCount = document.getElementById('charCount');
         const speakBtn = document.getElementById('speakBtn');
         const stopBtn = document.getElementById('stopBtn');
         const ttfbValue = document.getElementById('ttfbValue');
@@ -258,7 +410,7 @@
         const jitterValue = document.getElementById('jitterValue');
         const statusLabel = document.getElementById('statusLabel');
         const statusDot = document.getElementById('statusDot');
-        const canvas = document.getElementById('oscilloscope');
+        const canvas = document.getElementById('visualizer');
         const ctx = canvas.getContext('2d');
 
         let audioCtx;
@@ -266,14 +418,19 @@
         let nextStartTime = 0;
         let lastChunkArrival = 0;
         let deltas = [];
-
-        // Oscilloscope setup
         let analyser;
         let dataArray;
+
+        function updateCharCount() {
+            charCount.innerText = `${textInput.value.length} characters`;
+        }
+        textInput.addEventListener('input', updateCharCount);
+        updateCharCount();
+
         function setupVisualizer() {
             if (!analyser) {
                 analyser = audioCtx.createAnalyser();
-                analyser.fftSize = 2048;
+                analyser.fftSize = 256;
                 const bufferLength = analyser.frequencyBinCount;
                 dataArray = new Uint8Array(bufferLength);
             }
@@ -281,55 +438,67 @@
 
         function draw() {
             requestAnimationFrame(draw);
-            if (!analyser) return;
+            const width = canvas.width;
+            const height = canvas.height;
+
+            if (!analyser) {
+                ctx.clearRect(0, 0, width, height);
+                ctx.beginPath();
+                ctx.moveTo(0, height / 2);
+                ctx.lineTo(width, height / 2);
+                ctx.strokeStyle = '#2a2a2a';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                return;
+            }
 
             analyser.getByteTimeDomainData(dataArray);
-            ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, width, height);
+
             ctx.lineWidth = 2;
-            ctx.strokeStyle = '#6366f1';
+            ctx.strokeStyle = '#faff69';
             ctx.beginPath();
 
-            const sliceWidth = canvas.width * 1.0 / dataArray.length;
+            const sliceWidth = width / dataArray.length;
             let x = 0;
 
             for (let i = 0; i < dataArray.length; i++) {
                 const v = dataArray[i] / 128.0;
-                const y = v * canvas.height / 2;
+                const y = (v * height) / 2;
                 if (i === 0) ctx.moveTo(x, y);
                 else ctx.lineTo(x, y);
                 x += sliceWidth;
             }
-            ctx.lineTo(canvas.width, canvas.height / 2);
+            ctx.lineTo(width, height / 2);
             ctx.stroke();
         }
-        draw();
+
+        function updateStatus(label, type = 'idle') {
+            statusLabel.innerText = label;
+            statusDot.className = 'status-dot' + (type === 'active' ? ' active' : (type === 'error' ? ' error' : ''));
+        }
 
         speakBtn.onclick = async () => {
             if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)({
-                    sampleRate: 24000 // Match model SR
-                });
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
                 setupVisualizer();
             }
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-            if (audioCtx.state === 'suspended') {
-                await audioCtx.resume();
-            }
-
-            const text = textInput.value;
+            const text = textInput.value.trim();
             if (!text) return;
 
             speakBtn.disabled = true;
-            statusLabel.innerText = 'Connecting...';
-            statusDot.className = 'status-dot active';
+            updateStatus('Connecting to stream...', 'active');
             
-            ttfbValue.innerText = '-';
-            deltaValue.innerText = '-';
-            jitterValue.innerText = '-';
+            ttfbValue.innerText = '0ms';
+            deltaValue.innerText = '0ms';
+            jitterValue.innerText = '0ms';
             deltas = [];
             
-            nextStartTime = audioCtx.currentTime + 0.1; // Small buffer for first chunk
+            nextStartTime = audioCtx.currentTime + 0.1;
             lastChunkArrival = Date.now();
 
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -340,53 +509,39 @@
                 if (typeof event.data === 'string') {
                     const msg = JSON.parse(event.data);
                     if (msg.status === 'starting') {
-                        statusLabel.innerText = 'Streaming...';
+                        updateStatus('Synthesis in progress', 'active');
                     } else if (msg.status === 'streaming') {
-                        if (msg.ttfb) {
-                            ttfbValue.innerText = Math.round(msg.ttfb);
-                        }
+                        if (msg.ttfb) ttfbValue.innerText = Math.round(msg.ttfb) + 'ms';
                         
                         const now = Date.now();
                         const arrivalDelta = now - lastChunkArrival;
                         lastChunkArrival = now;
                         
-                        if (arrivalDelta > 1) { // Filter out near-zero deltas if multiple messages sent together
+                        if (arrivalDelta > 1) {
                             deltas.push(arrivalDelta);
-                            deltaValue.innerText = Math.round(arrivalDelta);
-                            
+                            deltaValue.innerText = Math.round(arrivalDelta) + 'ms';
                             if (deltas.length > 1) {
                                 const avg = deltas.reduce((a, b) => a + b) / deltas.length;
                                 const jitter = deltas.slice(-10).reduce((acc, val) => acc + Math.abs(val - avg), 0) / Math.min(deltas.length, 10);
-                                jitterValue.innerText = Math.round(jitter);
-                                
-                                if (arrivalDelta > 100) deltaValue.classList.add('warning');
-                                else deltaValue.classList.remove('warning');
+                                jitterValue.innerText = Math.round(jitter) + 'ms';
+                                deltaValue.style.color = arrivalDelta > 150 ? 'var(--danger)' : 'var(--primary)';
                             }
                         }
-                        
-                        if (msg.is_final) {
-                            // Handled by complete status usually
-                        }
                     } else if (msg.status === 'complete') {
-                        statusLabel.innerText = 'Finished';
-                        statusDot.className = 'status-dot';
+                        updateStatus('Stream completed');
                         speakBtn.disabled = false;
                     } else if (msg.status === 'error') {
-                        statusLabel.innerText = 'Error: ' + msg.message;
-                        statusDot.className = 'status-dot';
+                        updateStatus('Stream error: ' + msg.message, 'error');
                         speakBtn.disabled = false;
                     }
                 } else {
-                    // Audio binary data
                     const audioData = new Float32Array(event.data);
                     const buffer = audioCtx.createBuffer(1, audioData.length, 24000);
                     buffer.getChannelData(0).set(audioData);
-
                     const source = audioCtx.createBufferSource();
                     source.buffer = buffer;
                     source.connect(analyser);
                     analyser.connect(audioCtx.destination);
-
                     const startTime = Math.max(nextStartTime, audioCtx.currentTime);
                     source.start(startTime);
                     nextStartTime = startTime + buffer.duration;
@@ -395,47 +550,36 @@
 
             ws.onclose = () => {
                 speakBtn.disabled = false;
-                if (statusLabel.innerText === 'Streaming...') {
-                    statusLabel.innerText = 'Ready';
-                    statusDot.className = 'status-dot';
-                }
+                if (statusLabel.innerText.includes('Synthesis')) updateStatus('System Ready');
             };
 
-            ws.onerror = (err) => {
-                console.error('WS Error:', err);
-                statusLabel.innerText = 'Connection Error';
-                statusDot.className = 'status-dot';
-                speakBtn.disabled = false;
-            };
-
-            ws.onopen = () => {
-                ws.send(JSON.stringify({
-                    text: text,
-                    language: 'ne'
-                }));
-            };
+            ws.onopen = () => ws.send(JSON.stringify({ text: text, language: 'ne' }));
         };
+
+        document.querySelectorAll('.phrase-tag').forEach(tag => {
+            tag.onclick = () => {
+                textInput.value = tag.getAttribute('data-text');
+                updateCharCount();
+                textInput.focus();
+            };
+        });
 
         stopBtn.onclick = () => {
             if (ws) ws.close();
-            if (audioCtx) {
-                audioCtx.close();
-                audioCtx = null;
-                analyser = null;
-            }
+            if (audioCtx) { audioCtx.close(); audioCtx = null; analyser = null; }
             speakBtn.disabled = false;
-            statusLabel.innerText = 'Stopped';
-            statusDot.className = 'status-dot';
+            updateStatus('Stream Aborted');
         };
 
-        // Resize canvas
         function resize() {
-            canvas.width = canvas.offsetWidth;
-            canvas.height = canvas.offsetHeight;
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = canvas.offsetWidth * dpr;
+            canvas.height = canvas.offsetHeight * dpr;
+            ctx.scale(dpr, dpr);
         }
-        window.onresize = resize;
+        window.addEventListener('resize', resize);
         resize();
-
+        draw();
     </script>
 </body>
 </html>
